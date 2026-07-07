@@ -885,6 +885,43 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"display.spinnerPack": {
+		type: "enum",
+		values: [
+			"default",
+			"fire",
+			"ocean",
+			"matrix",
+			"synthwave",
+			"aurora",
+			"dots-classic",
+			"pulse",
+			"reactive",
+		] as const,
+		default: "default",
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Spinner Pack",
+			description: "Themed spinner frames + animated gradient for the working/loading indicator",
+			options: [
+				{ value: "default", label: "Default", description: "Theme spinner with the standard shimmer" },
+				{ value: "fire", label: "Fire", description: "Flickering ember gradient, red through amber" },
+				{ value: "ocean", label: "Ocean", description: "Rolling deep-blue to cyan swell" },
+				{ value: "matrix", label: "Matrix", description: "Cascading terminal green rain" },
+				{ value: "synthwave", label: "Synthwave", description: "Neon magenta / violet / cyan sunset" },
+				{ value: "aurora", label: "Aurora", description: "Northern-lights green into violet" },
+				{
+					value: "dots-classic",
+					label: "Dots Classic",
+					description: "Familiar braille dots with a subtle shimmer",
+				},
+				{ value: "pulse", label: "Pulse", description: "Breathing single-hue heartbeat" },
+				{ value: "reactive", label: "Reactive", description: "VU-meter gradient that speeds up with throughput" },
+			],
+		},
+	},
+
 	"display.smoothStreaming": {
 		type: "boolean",
 		default: true,

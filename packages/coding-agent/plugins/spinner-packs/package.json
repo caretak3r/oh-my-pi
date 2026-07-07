@@ -1,0 +1,35 @@
+{
+  "name": "spinner-packs",
+  "version": "1.0.0",
+  "description": "Themed spinner frames and animated gradient colorizers for the working/loading indicator",
+  "keywords": ["oh-my-pi", "omp", "plugin", "spinner", "loader", "theme"],
+  "omp": {
+    "name": "spinner-packs",
+    "version": "1.0.0",
+    "description": "Themed spinner frames and animated gradient colorizers for the working/loading indicator",
+    "commands": ["commands/spinner.md"],
+    "settings": {
+      "spinnerPack": {
+        "type": "enum",
+        "description": "Themed spinner + animated gradient for the working/loading indicator. Mirrors the core `display.spinnerPack` setting that the loader reads.",
+        "values": [
+          "default",
+          "fire",
+          "ocean",
+          "matrix",
+          "synthwave",
+          "aurora",
+          "dots-classic",
+          "pulse",
+          "reactive"
+        ],
+        "default": "default"
+      },
+      "animations": {
+        "type": "boolean",
+        "description": "Enable the animated gradient sweep. When off, the pack renders a static gradient. Backed at runtime by the core `display.shimmer` toggle.",
+        "default": true
+      }
+    }
+  }
+}
