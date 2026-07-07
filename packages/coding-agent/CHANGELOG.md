@@ -5,6 +5,7 @@
 ### Changed
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.
+
 ### Added
 
 - Spinner Personality Packs: themed spinner frames with animated gradient colorizers for the working/loading indicator, selectable via the `display.spinnerPack` setting (`fire`, `ocean`, `matrix`, `synthwave`, `aurora`, `dots-classic`, `pulse`, `reactive`). Gradients sweep at 30fps while streaming, follow the `display.shimmer` animation toggle, degrade to the xterm-256 palette without true color, and stay plain text with no escapes on non-TTY / `NO_COLOR` / `CI`.
