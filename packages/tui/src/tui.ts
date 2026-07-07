@@ -1303,6 +1303,30 @@ export class TUI extends Container {
 	get synchronizedOutput(): boolean {
 		return this.#synchronizedOutputEnabled;
 	}
+
+	/**
+	 * Wall-clock cost, in milliseconds, of the most recent composed frame. This is
+	 * the same value that feeds adaptive render backpressure. Read-only surface for
+	 * ambient animators (the `@oh-my-pi/pi-animation` kit) that want a raw cost to
+	 * derive their own EWMA/threshold instead of the coarse
+	 * {@link renderUnderPressure} boolean.
+	 */
+	get lastFrameCostMs(): number {
+		return this.#lastFrameCostMs;
+	}
+
+	/**
+	 * Read-only render-backpressure signal for ambient animations. True when the
+	 * last frame cost enough that the adaptive scheduler is actively throttling
+	 * paints — i.e. `#lastFrameCostMs * 2` (the adaptive floor) already exceeds the
+	 * base render interval, so the editor is behind on its own repaints. Ambient
+	 * animators read this through the `tui` handed to their widget factory to shed
+	 * frames instead of guessing scheduler internals, keeping the animation family
+	 * strictly additive.
+	 */
+	get renderUnderPressure(): boolean {
+		return this.#lastFrameCostMs * 2 > TUI.#MIN_RENDER_INTERVAL_MS;
+	}
 	#deccaraFillsEnabled(): boolean {
 		// DECCARA fill rectangles arrive after shortened row text; synchronized
 		// output hides that intermediate default-background state from users.

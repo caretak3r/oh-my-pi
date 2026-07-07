@@ -15376,11 +15376,24 @@ export class AgentSession {
 	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined {
 		const breakdown = this.getContextBreakdown(options);
 		if (!breakdown) return undefined;
-		return {
+		const usage: ContextUsage = {
 			tokens: breakdown.usedTokens,
 			contextWindow: breakdown.contextWindow,
 			percent: breakdown.contextWindow > 0 ? (breakdown.usedTokens / breakdown.contextWindow) * 100 : 0,
 		};
+		// Expose the auto-compaction forecast to extensions using the SAME
+		// resolver the runtime uses to trigger compaction, so a plugin reads the
+		// real threshold instead of approximating it from `percent`. Omitted when
+		// there is no usable window or auto-compaction is disabled/off.
+		if (breakdown.contextWindow > 0) {
+			const compactionSettings = this.settings.getGroup("compaction");
+			if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
+				const thresholdTokens = resolveThresholdTokens(breakdown.contextWindow, compactionSettings);
+				usage.compactionThresholdTokens = thresholdTokens;
+				usage.tokensUntilCompaction = thresholdTokens - breakdown.usedTokens;
+			}
+		}
+		return usage;
 	}
 
 	/**
