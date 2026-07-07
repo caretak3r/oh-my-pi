@@ -1,6 +1,7 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import { AnimationHost, backpressureFromTui, MotionPolicy } from "@oh-my-pi/pi-animation";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
@@ -9,6 +10,11 @@ import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { detectCacheInvalidation } from "../../modes/components/cache-invalidation-marker";
+import {
+	type CompactionAction,
+	CompactionVacuumWidget,
+	formatCompactionSettle,
+} from "../../modes/components/compaction-vacuum";
 import {
 	ReadToolGroupComponent,
 	readArgsHaveTarget,
@@ -113,6 +119,14 @@ export class EventController {
 	#prevHideThinking = false;
 	#handlers: AgentSessionEventHandlers;
 	#terminalProgressActive = false;
+	// Shared animation-kit host/policy for ambient animated widgets, created lazily
+	// on first use and reused across compactions. Disposed with the controller.
+	#animationHost: AnimationHost | undefined;
+	#motionPolicy: MotionPolicy | undefined;
+	// Live compaction condense animation (replaces the plain loader when motion is
+	// on); the before-token snapshot feeds the settle line rendered on end.
+	#compactionVacuum: CompactionVacuumWidget | undefined;
+	#compactionBeforeTokens = 0;
 
 	constructor(private ctx: InteractiveModeContext) {
 		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
@@ -197,11 +211,37 @@ export class EventController {
 		this.#cancelIdleCompaction();
 		this.#cancelIdleRecap();
 		this.#setTerminalProgress(false);
+		this.#compactionVacuum?.dispose();
+		this.#compactionVacuum = undefined;
+		this.#animationHost?.dispose();
+		this.#animationHost = undefined;
+		this.#motionPolicy = undefined;
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
 		}
 		this.#ircExpiryTimers.clear();
 		this.#liveIrcCards.clear();
+	}
+
+	/**
+	 * Lazily build (and cache) the shared animation-kit host + motion policy, then
+	 * re-sync the policy to the current `display.animations` setting so a live
+	 * settings change is honored. The policy resolves `off` on its own for
+	 * non-TTY / CI / NO_COLOR / backpressure, which is the static-fallback gate.
+	 */
+	#ensureAnimation(): { host: AnimationHost; policy: MotionPolicy } {
+		if (!this.#animationHost || !this.#motionPolicy) {
+			const backpressure = backpressureFromTui(this.ctx.ui);
+			this.#motionPolicy = new MotionPolicy(
+				{ hasUI: true, isTTY: process.stdout.isTTY === true, backpressure },
+				this.ctx.settings.get("display.animations"),
+			);
+			this.#animationHost = new AnimationHost({ policy: this.#motionPolicy, backpressure });
+		} else {
+			this.#motionPolicy.setSetting(this.ctx.settings.get("display.animations"));
+			this.#motionPolicy.refresh();
+		}
+		return { host: this.#animationHost, policy: this.#motionPolicy };
 	}
 
 	#resetReadGroup(): void {
@@ -296,6 +336,10 @@ export class EventController {
 		this.#displaceablePollComponent = undefined;
 		this.#displaceableTodoComponent = undefined;
 		this.#lastTtsrNotification = undefined;
+		// The condense animation is anchored in the previous session's status area;
+		// dispose it so its shared-clock subscription cannot outlive the switch.
+		this.#compactionVacuum?.dispose();
+		this.#compactionVacuum = undefined;
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.stop();
 	}
@@ -1185,6 +1229,26 @@ export class EventController {
 					: event.action === "snapcompact"
 						? "Auto-snapcompact"
 						: "Auto context-full maintenance";
+		// Snapshot the before-token count now, while the full context is still live,
+		// so the settle line can report an honest before→after even if usage shifts.
+		this.#compactionBeforeTokens = this.ctx.viewSession.getContextUsage()?.tokens ?? 0;
+		// Motion on → the condense animation replaces the plain loader; motion off
+		// (setting off / non-TTY / CI / NO_COLOR / backpressure) falls back to it.
+		const { host, policy } = this.#ensureAnimation();
+		if (policy.tier !== "off") {
+			this.#compactionVacuum = new CompactionVacuumWidget({
+				tui: this.ctx.ui,
+				host,
+				policy,
+				action: event.action,
+				beforeTokens: this.#compactionBeforeTokens,
+				reasonText,
+				escHint: this.#maintenanceEscHint(),
+			});
+			this.ctx.statusContainer.addChild(this.#compactionVacuum);
+			this.ctx.ui.requestRender();
+			return;
+		}
 		this.ctx.autoCompactionLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
@@ -1200,11 +1264,22 @@ export class EventController {
 		this.#cancelIdleCompaction();
 		this.#cancelIdleRecap();
 		this.#setTerminalProgress(false);
+		const vacuum = this.#compactionVacuum;
+		this.#compactionVacuum = undefined;
 		if (this.ctx.autoCompactionLoader) {
 			this.ctx.autoCompactionLoader.stop();
 			this.ctx.autoCompactionLoader = undefined;
 			this.ctx.statusContainer.clear();
+		} else if (vacuum) {
+			// Stop the condense animation (unsubscribes from the shared frame clock)
+			// and drop it from the transient status area; settlement lands in the
+			// transcript below, so nothing is left half-animated.
+			vacuum.dispose();
+			this.ctx.statusContainer.clear();
 		}
+		// Only enrich completion messages with real before→after counts when the
+		// animation ran; the static fallback keeps the plain loader-era messages.
+		const usedVacuum = vacuum !== undefined;
 		const isHandoffAction = event.action === "handoff";
 		const isShakeAction = event.action === "shake";
 		const isSnapcompactAction = event.action === "snapcompact";
@@ -1235,13 +1310,15 @@ export class EventController {
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();
-				this.ctx.showStatus("Auto-shake completed");
+				this.ctx.showStatus(this.#compactionSettleStatus(event.action, usedVacuum) ?? "Auto-shake completed");
 			}
 		} else if (event.result) {
 			this.ctx.lastAssistantUsage = undefined;
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();
 			this.ctx.ui.requestRender();
+			const settle = this.#compactionSettleStatus(event.action, usedVacuum, event.result.tokensBefore);
+			if (settle) this.ctx.showStatus(settle);
 		} else if (event.errorMessage) {
 			this.ctx.showWarning(event.errorMessage);
 		} else if (isHandoffAction) {
@@ -1251,7 +1328,7 @@ export class EventController {
 			this.ctx.statusLine.invalidate();
 			this.ctx.ui.requestRender();
 			await this.ctx.reloadTodos();
-			this.ctx.showStatus("Auto-handoff completed");
+			this.ctx.showStatus(this.#compactionSettleStatus(event.action, usedVacuum) ?? "Auto-handoff completed");
 		} else if (event.skipped) {
 			// Benign skip: no model selected, no candidate models available, or nothing
 			// to compact yet. Not a failure — suppress the warning.
@@ -1263,6 +1340,22 @@ export class EventController {
 		await this.ctx.flushCompactionQueue({ willRetry: event.willRetry });
 		this.#ensureWorkingLoaderWhileStreaming();
 		this.ctx.ui.requestRender();
+	}
+
+	/**
+	 * Build the reassuring settle line (before→after + kept caption) for a
+	 * successful compaction. Returns `undefined` when the animation did not run
+	 * (static fallback keeps the plain completion messages) or when there is no
+	 * honest reclamation to report — the caller then falls back to a plain
+	 * message rather than claim a false or negative reclaim. Reads the live
+	 * post-compaction usage as the "after"; `beforeOverride` (from a
+	 * `CompactionResult`) is preferred over the start snapshot when present.
+	 */
+	#compactionSettleStatus(action: CompactionAction, usedVacuum: boolean, beforeOverride?: number): string | undefined {
+		if (!usedVacuum) return undefined;
+		const beforeTokens = beforeOverride ?? this.#compactionBeforeTokens;
+		const afterTokens = this.ctx.viewSession.getContextUsage()?.tokens ?? 0;
+		return formatCompactionSettle({ action, beforeTokens, afterTokens });
 	}
 
 	async #handleAutoRetryStart(event: Extract<AgentSessionEvent, { type: "auto_retry_start" }>): Promise<void> {
