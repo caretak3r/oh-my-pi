@@ -771,6 +771,15 @@ export class StatusLineComponent implements Component {
 		return null;
 	}
 
+	/**
+	 * Latest tokens/sec surfaced to the status line, if any. Refreshed on every
+	 * status-line render; exposed so the reactive spinner pack can reuse the value
+	 * instead of recomputing the rate on its own render hot path.
+	 */
+	getTokensPerSecond(): number | undefined {
+		return this.#lastTokensPerSecond ?? undefined;
+	}
+
 	#getUsageContextKey(session: AgentSession): string {
 		const activeProvider = session.state.model?.provider ?? session.model?.provider ?? "";
 		if (!activeProvider) return "";

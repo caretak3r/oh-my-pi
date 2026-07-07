@@ -3645,7 +3645,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			const spinnerPack = this.settings.get("display.spinnerPack");
 			if (spinnerPack !== "default" && isSpinnerPackId(spinnerPack)) {
 				const capabilities = detectSpinnerCapabilities({ trueColor: TERMINAL.trueColor });
-				const resolved = resolveSpinnerPack(spinnerPack, { animations: shimmerEnabled(), capabilities });
+				const resolved = resolveSpinnerPack(spinnerPack, {
+					animations: shimmerEnabled(),
+					capabilities,
+					tokensPerSecond: () => this.statusLine.getTokensPerSecond(),
+				});
 				if (resolved) {
 					spinnerFrames = resolved.frames;
 					messageColorizer = resolved.colorize;

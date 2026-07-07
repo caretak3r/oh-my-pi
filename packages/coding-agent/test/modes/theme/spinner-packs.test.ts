@@ -209,6 +209,39 @@ describe("resolveSpinnerPack", () => {
 		expect(slow.colorize("generating")).not.toBe(fast.colorize("generating"));
 	});
 
+	it("reactive pack tracks a live tokensPerSecond signal and degrades to pack.speed when absent", () => {
+		let now = 0;
+		const clock = () => now;
+		// A single live callback whose value changes over time, mirroring the
+		// production wiring `() => this.statusLine.getTokensPerSecond()`.
+		let rate: number | undefined;
+		const reactive = resolveSpinnerPack("reactive", {
+			animations: true,
+			capabilities: TRUE_COLOR,
+			clock,
+			tokensPerSecond: () => rate,
+		})!;
+		// Reference that never reacts: undefined throughput pins it to pack.speed.
+		const baseline = resolveSpinnerPack("reactive", {
+			animations: true,
+			capabilities: TRUE_COLOR,
+			clock,
+			tokensPerSecond: () => undefined,
+		})!;
+
+		// No throughput available yet -> reactive falls back to the fixed pack.speed
+		// (no NaN/jitter), matching the baseline exactly.
+		now = 250;
+		expect(rate).toBeUndefined();
+		expect(reactive.colorize("streaming")).toBe(baseline.colorize("streaming"));
+
+		// A live rate arrives -> the same wall-clock delta now sweeps further.
+		rate = 300;
+		now = 500;
+		expect(reactive.colorize("streaming")).not.toBe(baseline.colorize("streaming"));
+		expect(Bun.stripANSI(reactive.colorize("streaming"))).toBe("streaming");
+	});
+
 	it("returns undefined for an unknown id", () => {
 		// Cast through unknown: callers guard with isSpinnerPackId, but the resolver
 		// must fail closed rather than throw.
