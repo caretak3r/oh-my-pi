@@ -242,6 +242,40 @@ describe("resolveSpinnerPack", () => {
 		expect(Bun.stripANSI(reactive.colorize("streaming"))).toBe("streaming");
 	});
 
+	it("accumulates phase incrementally: many small frames match one equal-elapsed frame", () => {
+		let now = 0;
+		const clock = () => now;
+		const stepped = resolveSpinnerPack("matrix", { animations: true, capabilities: TRUE_COLOR, clock })!;
+		const single = resolveSpinnerPack("matrix", { animations: true, capabilities: TRUE_COLOR, clock })!;
+
+		// Step one through several sub-clamp frames; advance the other in one jump.
+		for (const t of [30, 60, 90]) {
+			now = t;
+			stepped.colorize("indexing");
+		}
+		const steppedOut = stepped.colorize("indexing"); // still at now=90
+		now = 90;
+		const singleOut = single.colorize("indexing");
+		expect(steppedOut).toBe(singleOut);
+	});
+
+	it("clamps a stalled frame so the sweep advances by at most one frame, not the whole gap", () => {
+		let now = 0;
+		const clock = () => now;
+		const stalled = resolveSpinnerPack("matrix", { animations: true, capabilities: TRUE_COLOR, clock })!;
+		stalled.colorize("waiting"); // establish lastClock at now=0
+		now = 5000; // long stall
+		const afterStall = stalled.colorize("waiting");
+
+		// A reference advanced by exactly the clamp window (100ms) lands identically.
+		let refNow = 0;
+		const refClock = () => refNow;
+		const ref = resolveSpinnerPack("matrix", { animations: true, capabilities: TRUE_COLOR, clock: refClock })!;
+		ref.colorize("waiting");
+		refNow = 100;
+		expect(afterStall).toBe(ref.colorize("waiting"));
+	});
+
 	it("returns undefined for an unknown id", () => {
 		// Cast through unknown: callers guard with isSpinnerPackId, but the resolver
 		// must fail closed rather than throw.

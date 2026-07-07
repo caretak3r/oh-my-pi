@@ -11,6 +11,7 @@ import {
 	isEnoent,
 	logger,
 } from "@oh-my-pi/pi-utils";
+import { isSettingsInitialized, type SettingPath, settings } from "../../config/settings";
 import { withExitGuard } from "../utils";
 import { type GitSource, parseGitUrl } from "./git-url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
@@ -112,6 +113,46 @@ interface PluginPackageSnapshot {
 interface RuntimePackageJson {
 	name?: unknown;
 }
+
+/**
+ * Read the core setting a mapped plugin setting mirrors, coerced back to the
+ * plugin setting's own type. Returns `undefined` when the schema is unmapped or
+ * the core settings singleton is not initialized (e.g. some CLI contexts).
+ */
+function readMappedCoreValue(schema: PluginSettingSchema): unknown {
+	if (!schema.mapsTo || !isSettingsInitialized()) return undefined;
+	const core = settings.get(schema.mapsTo as SettingPath) as unknown;
+	if (schema.type === "boolean") {
+		const off = schema.mapsToFalse ?? false;
+		return core !== off;
+	}
+	return core;
+}
+
+/**
+ * Write a mapped plugin setting through to its core setting so both share one
+ * source of truth. Returns `true` when the write was routed to core, `false`
+ * when the setting is unmapped or core settings are unavailable (caller then
+ * falls back to the plugin-config store).
+ */
+function writeMappedCoreValue(schema: PluginSettingSchema, value: unknown): boolean {
+	if (!schema.mapsTo || !isSettingsInitialized()) return false;
+	const key = schema.mapsTo as SettingPath;
+	const set = settings.set as unknown as (path: SettingPath, value: unknown) => void;
+	if (schema.type === "boolean") {
+		const on = value === true || value === "true";
+		if (on) {
+			const off = schema.mapsToFalse ?? false;
+			if (settings.get(key) === off) set(key, schema.mapsToTrue ?? true);
+		} else {
+			set(key, schema.mapsToFalse ?? false);
+		}
+	} else {
+		set(key, value);
+	}
+	return true;
+}
+
 // =============================================================================
 // Plugin Manager
 // =============================================================================
@@ -815,8 +856,19 @@ export class PluginManager {
 	// Settings
 	// ==========================================================================
 
+	/** Manifest-declared settings schema for a plugin, empty if the plugin is not installed. */
+	async #settingSchemas(name: string): Promise<Record<string, PluginSettingSchema>> {
+		try {
+			const plugins = await this.list();
+			return plugins.find(p => p.name === name)?.manifest.settings ?? {};
+		} catch {
+			return {};
+		}
+	}
+
 	/**
-	 * Get all settings for a plugin.
+	 * Get all settings for a plugin. Settings that declare `mapsTo` resolve from
+	 * the core setting they mirror so the plugin panel/CLI never drifts from it.
 	 */
 	async getPluginSettings(name: string): Promise<Record<string, unknown>> {
 		const config = await this.#ensureConfigLoaded();
@@ -825,13 +877,23 @@ export class PluginManager {
 		const project = projectOverrides.settings?.[name] || {};
 
 		// Project settings override global
-		return { ...global, ...project };
+		const merged: Record<string, unknown> = { ...global, ...project };
+		const schemas = await this.#settingSchemas(name);
+		for (const [key, schema] of Object.entries(schemas)) {
+			const mapped = readMappedCoreValue(schema);
+			if (mapped !== undefined) merged[key] = mapped;
+		}
+		return merged;
 	}
 
 	/**
-	 * Set a plugin setting value.
+	 * Set a plugin setting value. Settings that declare `mapsTo` are written
+	 * through to the core setting they mirror instead of the plugin-config store.
 	 */
 	async setPluginSetting(name: string, key: string, value: unknown): Promise<void> {
+		const schema = (await this.#settingSchemas(name))[key];
+		if (schema && writeMappedCoreValue(schema, value)) return;
+
 		const config = await this.#ensureConfigLoaded();
 		if (!config.settings[name]) {
 			config.settings[name] = {};

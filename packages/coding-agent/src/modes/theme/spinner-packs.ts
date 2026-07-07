@@ -359,6 +359,8 @@ export interface ResolvedSpinner {
 
 const REACTIVE_TOKENS_PER_CYCLE = 40;
 const REACTIVE_MAX_SPEED = 4;
+/** Max time delta (ms) integrated in one frame, so a stalled render can't lurch the sweep. */
+const MAX_FRAME_MS = 100;
 
 function sweepSpeed(pack: SpinnerPackDef, options: ResolveSpinnerPackOptions): number {
 	if (!pack.reactive) return pack.speed;
@@ -381,9 +383,16 @@ export function resolveSpinnerPack(id: SpinnerPackId, options: ResolveSpinnerPac
 	const capabilities = options.capabilities ?? detectSpinnerCapabilities();
 	const clock = options.clock ?? (() => performance.now());
 	const animate = options.animations && capabilities.color;
-	const start = clock();
+	// Phase is the time-integral of the (possibly live) sweep speed: `phase += speed * dt`.
+	let lastClock = clock();
+	let phase = 0;
 	const colorize = ((message: string): string => {
-		const phase = animate ? (sweepSpeed(pack, options) * (clock() - start)) / 1000 : 0;
+		if (animate) {
+			const now = clock();
+			const dt = Math.min(Math.max(now - lastClock, 0), MAX_FRAME_MS);
+			lastClock = now;
+			phase = frac(phase + (sweepSpeed(pack, options) * dt) / 1000);
+		}
 		return colorizeAtPhase(pack, message, phase, capabilities);
 	}) as LoaderMessageColorFn;
 	if (animate) {

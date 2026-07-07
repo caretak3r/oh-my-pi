@@ -6,6 +6,7 @@
 
 import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveOrDefaultProjectRegistryPath } from "../discovery/helpers";
 import { PluginManager, parseSettingValue, validateSetting } from "../extensibility/plugins";
 import {
@@ -720,6 +721,10 @@ async function handleConfig(
 			chalk.red(`Usage: ${APP_NAME} plugin config <list|get|set|delete|validate> <plugin> [key] [value]`),
 		);
 		process.exit(1);
+	}
+
+	if (!isSettingsInitialized()) {
+		await Settings.init();
 	}
 
 	const [subcommand, pluginName, key, ...valueArgs] = args;
