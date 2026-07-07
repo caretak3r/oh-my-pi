@@ -60,6 +60,7 @@
     "@oh-my-pi/omp-stats": "catalog:",
     "@oh-my-pi/pi-agent-core": "catalog:",
     "@oh-my-pi/pi-ai": "catalog:",
+    "@oh-my-pi/pi-animation": "catalog:",
     "@oh-my-pi/pi-catalog": "catalog:",
     "@oh-my-pi/pi-mnemopi": "catalog:",
     "@oh-my-pi/pi-natives": "catalog:",
@@ -503,6 +504,14 @@
       "import": "./src/plan-mode/*.ts"
     },
     "./prompts/*": "./src/prompts/*.md",
+    "./retry-radar": {
+      "types": "./src/retry-radar/index.ts",
+      "import": "./src/retry-radar/index.ts"
+    },
+    "./retry-radar/*": {
+      "types": "./src/retry-radar/*.ts",
+      "import": "./src/retry-radar/*.ts"
+    },
     "./secrets": {
       "types": "./src/secrets/index.ts",
       "import": "./src/secrets/index.ts"

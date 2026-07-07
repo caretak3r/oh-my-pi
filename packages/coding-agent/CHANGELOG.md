@@ -5,6 +5,10 @@
 ### Changed
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.
+### Added
+
+- Added Retry Radar: a draining countdown ring shown during auto-retry backoff (attempt count + short reason, e.g. `retry 2/5 · 429 · 8s`), settling green on recovery and red on give-up. Built on the shared `@oh-my-pi/pi-animation` kit; gated by the new `animations` setting and forced to a single static status line outside a TTY (or under `NO_COLOR`/`CI`/dumb terminals).
+- Added an `animations` setting (`off` | `subtle` | `full`) controlling the motion tier for ambient animated widgets.
 
 ## [16.3.11] - 2026-07-06
 
