@@ -1855,6 +1855,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		inlineExtensions.push((await import("./cadence-equalizer")).createCadenceEqualizerExtension);
 		inlineExtensions.push((await import("./goal-horizon")).createGoalHorizonExtension);
 		inlineExtensions.push((await import("./model-weather-vane")).createModelWeatherVaneExtension);
+		inlineExtensions.push((await import("./prompt-charge")).createPromptChargeExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}

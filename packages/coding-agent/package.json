@@ -503,6 +503,14 @@
       "types": "./src/model-weather-vane/*.ts",
       "import": "./src/model-weather-vane/*.ts"
     },
+    "./prompt-charge": {
+      "types": "./src/prompt-charge/index.ts",
+      "import": "./src/prompt-charge/index.ts"
+    },
+    "./prompt-charge/*": {
+      "types": "./src/prompt-charge/*.ts",
+      "import": "./src/prompt-charge/*.ts"
+    },
     "./hindsight": {
       "types": "./src/hindsight/index.ts",
       "import": "./src/hindsight/index.ts"

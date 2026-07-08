@@ -1058,8 +1058,111 @@ setting; no new settings-schema entries. New `./model-weather-vane` and
   `role !== "assistant"` narrow before any state mutation, the same
   `toAssistant*Sample` guard shape Cost Candle uses for `message_end`.
 
+## 15. ⚡ Prompt Charge (oh-my-pi-tb7)
+
+**Status:** done.
+
+**Grounding:** the idea doc says "the input caret glows/charges as you type a
+longer prompt, releasing on submit. Grounded in `getEditorText` length."
+Checked piece by piece:
+- **`ExtensionContext.ui.getEditorText(): string`** (`extensibility/extensions/types.ts:236`,
+  on `ExtensionUIContext`, not the top-level `ExtensionContext`) is real and
+  live: the interactive-mode implementation
+  (`modes/controllers/extension-ui-controller.ts:82`) is
+  `getEditorText: () => this.ctx.editor.getText()`, reading the actual live
+  editor object each call — not a snapshot frozen at context-creation time.
+- **No per-keystroke `ExtensionEvent` exists anywhere in this codebase.** A
+  full sweep of `extensibility/shared-events.ts` and
+  `extensibility/extensions/types.ts`'s `ExtensionEvent` union confirms the
+  only `input`-shaped event (`InputEvent`, `types.ts:671`) fires exactly
+  once, at submit (`extensibility/extensions/runner.ts`'s `emitInput`, called
+  from `modes/controllers/input-controller.ts` on the submit path) — never
+  while typing. The internal `Editor.onChange` callback
+  (`packages/tui/src/components/editor.ts:459`) fires on every keystroke but
+  is a single-assignable field already claimed by
+  `input-controller.ts:534-543` for bash/python-mode border-color detection,
+  not a multi-subscriber event, and isn't exposed to extensions — wiring it
+  would be a core change out of scope for a `packages/coding-agent/src/`-only
+  feature.
+- **The resolution:** since `@oh-my-pi/pi-animation`'s `AnimationHost`
+  (`packages/animation/src/animation-host.ts`) already runs a real
+  `setInterval`-backed frame clock independent of any `ExtensionEvent` — every
+  Wave 2 widget's `AnimatedWidget.onFrame` hook already rides this clock —
+  Prompt Charge's widget polls `getEditorText()` itself from inside
+  `onFrame`, once per tick, using the live character count as the charge
+  signal. This is the first Wave 2 feature to poll a pull-accessor from
+  inside `onFrame` rather than only reacting to event-driven state mutation
+  (confirmed via a full sweep of every existing `onFrame` override — Agent
+  Fleet, Breathing Border, Cadence Equalizer, Todo Meteors, Diff Bloom, Token
+  Tide, Reflection Ripple, Model Weather Vane — none of them pull a `ctx`
+  accessor from the tick; Context Constellation's `getContextUsage()` pull is
+  the closest precedent, but it re-pulls from an *event* handler, not the
+  frame loop).
+- Overlap check: no shipped Wave 2 feature (14 shipped before this one) reads
+  editor/input text or renders anything about the prompt being composed —
+  genuinely unclaimed ground.
+
+**Module:** `packages/coding-agent/src/prompt-charge/` (`charge.ts`,
+`state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createPromptChargeExtension` pushed as the fifteenth inline
+extension in `sdk.ts` (`createAgentSession`), subscribed to `session_start`
+(mount), `input` (release), and `session_shutdown` (dispose). Placed
+`aboveEditor` (the split becomes 8 aboveEditor / 7 belowEditor). Reuses the
+existing shared `animations` setting; no new settings-schema entries. New
+`./prompt-charge` and `./prompt-charge/*` package.json export paths, inserted
+next to the `./model-weather-vane/*` cluster.
+
+**Test command:** `bun test packages/coding-agent/test/prompt-charge.test.ts`
+— 32 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- Unlike every other Wave 2 controller, this one mounts **unconditionally on
+  `session_start`** rather than lazily on a first data-bearing event (Cost
+  Candle/Model Weather Vane's "spawn lazily on first fire" precedent): an
+  idle 0%-charge caret is itself the correct resting state to show from the
+  very first frame, the same unconditional-mount shape Breathing Border uses
+  for `agent_start`. A session where the user never types anything just
+  shows a permanently-idle bar, which is the right behavior (not "nothing").
+- The charge curve is an asymptotic "capacitor charging" shape
+  (`1 - e^-chars/tau`, `charge.ts`'s `chargeFraction`) rather than a linear
+  ramp to a hard character cap — it visibly reacts to the very first
+  keystroke and flattens out approaching (never reaching) full charge for a
+  very long prompt, which reads more like "charging" than a linear meter.
+  `tau = 140` chars, tuned so a short question barely glows and a
+  paragraph-plus prompt reads as fully charged.
+- The release burst is captured from `event.text.length` — the real,
+  authoritative submitted-text length off the `input` event payload — rather
+  than the last polled frame's character count, which could in principle be
+  one tick stale relative to the actual submit. The burst then decays
+  quadratically (ease-out) over `RELEASE_DURATION_MS` (500ms) purely as a
+  function of elapsed time; the displayed fraction is
+  `max(liveTypedCharge, releaseBurstIntensity)` so the flash is visible at
+  full intensity even though the editor (and thus the live typed-charge
+  signal) clears to empty the instant a message submits.
+- No explicit "settle" transition/teardown the way Diff Bloom's
+  blooming→idle mount teardown works: Prompt Charge is a persistent-ambient
+  ambient status (Cost Candle's lifecycle template), so a fully-decayed
+  release burst simply evaluates to `0` forever after — cheap, correct, no
+  need to prune state.
+- `full` tier shows glyph + 10-cell bar + percentage; `subtle` drops the
+  percentage, matching every prior feature's "collapse to the dominant
+  signal" convention. Off-tier fallback has no frame clock to decay a release
+  over time (off tier's widget never subscribes to the host, so `onFrame`
+  never runs) — it shows a plain `"⚡ idle"` / `"⚡ N% charged"` /
+  `"⚡ released (N%)"` line, redrawn only on the `input` event since that's
+  the only signal path available in that tier.
+- Charge-bucket → color reuses the `ThemeColor`-token-not-raw-ANSI precedent
+  (`CHARGE_BUCKET_COLOR`, mirroring Token Tide's `BUCKET_THEME_COLOR` and
+  Model Weather Vane's `VANE_COLORS`): dim at rest, warming through
+  `syntaxVariable`/`syntaxFunction` to a hot `warning` at full charge.
+
 ## Ideas not yet started
 
-All fifteen ideas from `IDEA_WIZARD_IDEAS_WAVE2.md` (top 5 + next 10) are now
-implemented. Idea 15 (⚡ Prompt Charge) is the only one remaining before the
-"next 10" list is fully shipped.
+None. All fifteen ideas from `IDEA_WIZARD_IDEAS_WAVE2.md` (top 5 + next 10)
+are now implemented, each as its own atomic commit with behavioral tests, a
+green `bun check`, and a filed+closed bead. Remaining work per the run's
+stop condition: an edge-case hardening pass over every earlier feature, and
+an integration/gallery demo if feasible.
