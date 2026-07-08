@@ -89,6 +89,11 @@ export class MotionPolicy {
 		return TIER_CADENCE_MS[this.#tier];
 	}
 
+	/** Number of subscribed tier listeners. Mirrors `AnimationHost.subscriberCount` for leak checks. */
+	get listenerCount(): number {
+		return this.#listeners.size;
+	}
+
 	/** Update the `animations` setting and re-resolve. */
 	setSetting(setting: MotionSetting): void {
 		if (setting === this.#setting) return;

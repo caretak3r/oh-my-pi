@@ -13,7 +13,7 @@ export interface AnimatedWidgetOptions {
 	tui: AnimatedWidgetHost;
 	/** Shared frame clock this widget subscribes to while mounted. */
 	host: AnimationHost;
-	/** Motion policy; tier `off` means render one static frame and never subscribe. */
+	/** Motion policy. Tier `off` renders one static frame; live tier changes start/stop animation without a remount. */
 	policy: MotionPolicy;
 }
 
@@ -31,14 +31,16 @@ function rowsEqual(a: readonly string[], b: readonly string[]): boolean {
  * Base `Component` for ambient animated widgets. It owns the shared lifecycle so
  * each concrete widget is just "a pure model + a renderer":
  *
- * - On construction it subscribes to the {@link AnimationHost} (unless the
- *   {@link MotionPolicy} tier is `off`, in which case it renders one static frame
- *   and never subscribes).
+ * - On construction it subscribes to the {@link MotionPolicy} and syncs the
+ *   frame-clock subscription with the resolved tier: `off` renders one static
+ *   frame; live off<->on crossings start/stop the {@link AnimationHost}
+ *   subscription without a remount.
  * - Each frame it advances `elapsedMs`, calls the overridable {@link onFrame}
  *   hook, then re-renders at the last known width and — only if the rendered rows
  *   changed — requests a component-scoped repaint via
  *   `tui.requestComponentRender(this)`.
- * - `dispose()` unsubscribes and is idempotent (no leaked subscriber).
+ * - `dispose()` unsubscribes from both the host and the policy and is idempotent
+ *   (no leaked subscriber).
  *
  * Subclasses implement {@link renderFrame} to produce rows from their state and
  * the current phase (`this.elapsedMs`).
@@ -46,7 +48,9 @@ function rowsEqual(a: readonly string[], b: readonly string[]): boolean {
 export abstract class AnimatedWidget implements Component {
 	#tui: AnimatedWidgetHost;
 	#host: AnimationHost;
+	#policy: MotionPolicy;
 	#unsubscribe: (() => void) | undefined;
+	#unsubscribePolicy: (() => void) | undefined;
 	#disposed = false;
 	#elapsedMs = 0;
 	#lastWidth: number | undefined;
@@ -55,9 +59,13 @@ export abstract class AnimatedWidget implements Component {
 	constructor(options: AnimatedWidgetOptions) {
 		this.#tui = options.tui;
 		this.#host = options.host;
-		if (options.policy.tier !== "off") {
-			this.#unsubscribe = this.#host.subscribe((_frame, elapsedMs) => this.#handleFrame(elapsedMs));
+		this.#policy = options.policy;
+		if (this.#policy.tier !== "off") {
+			this.#subscribeToHost();
 		}
+		// Live tier changes: start/stop the frame-clock subscription when the tier
+		// crosses off<->on. subtle<->full is cadence-only and the host handles it.
+		this.#unsubscribePolicy = this.#policy.subscribe(() => this.#syncToTier());
 	}
 
 	/** Milliseconds elapsed since the host started — the animation phase. */
@@ -104,12 +112,39 @@ export abstract class AnimatedWidget implements Component {
 		this.#lastWidth = undefined;
 	}
 
-	/** Lifecycle teardown: unsubscribe from the frame clock. Idempotent. */
+	/** Lifecycle teardown: unsubscribe from the frame clock AND the policy. Idempotent. */
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
+		this.#unsubscribePolicy?.();
+		this.#unsubscribePolicy = undefined;
+	}
+
+	#subscribeToHost(): void {
+		this.#unsubscribe = this.#host.subscribe((_frame, elapsedMs) => this.#handleFrame(elapsedMs));
+	}
+
+	/**
+	 * Reconcile the frame-clock subscription with the live policy tier. Runs on
+	 * every resolved-tier change; only an off<->on crossing changes the
+	 * subscription. On a crossing, invalidate the render cache ({@link markDirty})
+	 * and request a scoped repaint so the switch is visible immediately; in
+	 * particular, a widget flipped to `off` settles on exactly one static frame.
+	 */
+	#syncToTier(): void {
+		if (this.#disposed) return;
+		const shouldAnimate = this.#policy.tier !== "off";
+		if (shouldAnimate === (this.#unsubscribe !== undefined)) return;
+		if (shouldAnimate) {
+			this.#subscribeToHost();
+		} else {
+			this.#unsubscribe?.();
+			this.#unsubscribe = undefined;
+		}
+		this.markDirty();
+		this.#tui.requestComponentRender(this);
 	}
 
 	#handleFrame(elapsedMs: number): void {

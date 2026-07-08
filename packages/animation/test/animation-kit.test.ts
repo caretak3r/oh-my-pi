@@ -331,3 +331,77 @@ describe("AnimatedWidget lifecycle", () => {
 		expect(tui.renders).toBe(0);
 	});
 });
+
+describe("AnimatedWidget live tier changes", () => {
+	it("animates without a remount when the tier changes from off to full", () => {
+		const scheduler = new FakeScheduler();
+		const policy = new MotionPolicy(interactiveEnv(), "off");
+		const host = new AnimationHost({ policy, scheduler });
+		const tui = new CountingHost();
+		const widget = new ClockWidget({ tui, host, policy });
+
+		expect(widget.animating).toBe(false);
+		expect(host.subscriberCount).toBe(0);
+
+		widget.render(80);
+		policy.setSetting("full");
+
+		expect(widget.animating).toBe(true);
+		expect(host.subscriberCount).toBe(1);
+		expect(tui.renders).toBe(1);
+
+		widget.render(80);
+		scheduler.advance(TIER_CADENCE_MS.full * 4 + 1);
+		expect(tui.renders).toBe(5);
+
+		widget.dispose();
+	});
+
+	it("stops the clock and settles on one static frame when the tier changes from full to off", () => {
+		const scheduler = new FakeScheduler();
+		const policy = new MotionPolicy(interactiveEnv(), "full");
+		const host = new AnimationHost({ policy, scheduler });
+		const tui = new CountingHost();
+		const widget = new ClockWidget({ tui, host, policy });
+
+		widget.render(80);
+		scheduler.advance(TIER_CADENCE_MS.full * 2 + 1);
+		expect(widget.animating).toBe(true);
+
+		const rendersBeforeOff = tui.renders;
+		policy.setSetting("off");
+		expect(widget.animating).toBe(false);
+		expect(host.subscriberCount).toBe(0);
+		expect(scheduler.activeTimers).toBe(0);
+		expect(tui.renders).toBe(rendersBeforeOff + 1);
+
+		const rows = widget.render(80);
+		const rendersAfterStaticFrame = tui.renders;
+		scheduler.advance(TIER_CADENCE_MS.full * 10 + 1);
+		expect(tui.renders).toBe(rendersAfterStaticFrame);
+		expect(widget.render(80)).toEqual(rows);
+
+		widget.dispose();
+	});
+
+	it("unsubscribes from both host and policy on dispose and stays idempotent", () => {
+		const scheduler = new FakeScheduler();
+		const policy = fullPolicy();
+		const host = new AnimationHost({ policy, scheduler });
+		const widget = new StaticWidget({ tui: new CountingHost(), host, policy });
+
+		expect(policy.listenerCount).toBe(2);
+		expect(host.subscriberCount).toBe(1);
+
+		widget.dispose();
+		expect(policy.listenerCount).toBe(1);
+		expect(host.subscriberCount).toBe(0);
+
+		policy.setSetting("off");
+		policy.setSetting("full");
+		expect(host.subscriberCount).toBe(0);
+
+		widget.dispose();
+		expect(policy.listenerCount).toBe(1);
+	});
+});
