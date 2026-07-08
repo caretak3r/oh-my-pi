@@ -1184,7 +1184,7 @@ the pass is resumable across iterations.
 | 4 | Todo Meteors | ✅ done | oh-my-pi-jj0 |
 | 5 | Breathing Border | ✅ done | oh-my-pi-bw0 |
 | 6 | Agent Fleet | ✅ done | oh-my-pi-nv4 |
-| 7 | Cost Candle | ⬜ pending | — |
+| 7 | Cost Candle | ✅ done | oh-my-pi-0a2 |
 | 8 | Reflection Ripple | ⬜ pending | — |
 | 9 | Memory Crystals | ⬜ pending | — |
 | 10 | Context Constellation | ⬜ pending | — |
@@ -1553,4 +1553,95 @@ One real bug found and fixed (`fireflyGlyph(NaN)` → literal `"undefined"`
 in rendered output, the fifth occurrence of this exact bug class this
 run); every other edge case degraded gracefully by design.
 `bun test packages/coding-agent/test/agent-fleet.test.ts`: 52 pass, 0
+fail. Root `bun run check` green across all workspaces after the fix.
+
+### 7. Cost Candle — hardening notes
+
+Added 15 edge-case behavioral tests to
+`packages/coding-agent/test/cost-candle.test.ts` (40 total, up from 25),
+covering `candle.ts`'s pure flame/wax/gutter math under adversarial
+(`NaN`/`Infinity`) inputs, `CostCandleState` edge cases, and the
+controller's dispose/remount idempotency:
+
+- **Real bug found and fixed**: `flameGlyph` had the exact same
+  missing-fallback shape as every prior glyph-ramp bug this run has found
+  (Session Bonsai's `budGlyph`, Todo Meteors' `meteorGlyph`/`emberGlyph`,
+  Breathing Border's `brightnessGlyph`, Agent Fleet's `fireflyGlyph`) —
+  this is the **sixth** occurrence. `flameGlyph`'s own clamp (`brightness
+  <= 0 ? 0 : brightness >= 1 ? 1 : brightness`) leaves `NaN` unclamped
+  (neither branch is true for `NaN`), so `Math.min(3, Math.floor(NaN *
+  4))` is `NaN` and `FLAME_GLYPHS[NaN]` is `undefined` — confirmed via a
+  standalone repro before touching source. Fixed with the same `??
+  FLAME_GLYPHS[0]` pattern as all five prior fixes. `NaN` is genuinely
+  reachable here through a new path not seen in prior features:
+  `CostCandleState.recordMessageCost` validates `costUsd` but never
+  validates the `elapsedMs` clock reading it's stamped with, so a single
+  bad (`NaN`) scheduler tick at record time permanently poisons
+  `lastMessageAt`; every later render then computes `msSinceTurn =
+  elapsedMs - NaN = NaN`, which `gutterEnvelope` and `flameBrightness`
+  both propagate straight through to the glyph lookup. Given this is now
+  a six-for-six recurrence across every glyph-ramp helper checked so far,
+  the remaining unhardened features (Reflection Ripple, Memory Crystals,
+  Context Constellation, Diff Bloom, Cadence Equalizer, Goal Horizon,
+  Model Weather Vane, Prompt Charge) should each be grep-checked for this
+  exact `RAMP[index]` (no `??` fallback) shape as the *first* step of
+  their hardening pass.
+- **`waxRemaining`/`gutterIntensity` mishandle `Infinity`** the same way
+  as `NaN`: both guard with `!Number.isFinite(x) || x <= 0`, which is
+  correct for `NaN`/negative/zero but means a literal `Infinity` cost
+  reads as `waxRemaining(Infinity) === 1` (a *fresh* candle) and
+  `gutterIntensity(Infinity) === 0` (*no* gutter) — backwards from the
+  "maximally expensive" reading you'd expect. Confirmed unreachable via
+  the real pipeline: `recordMessageCost` already rejects any non-finite
+  `costUsd` (including `Infinity`) before it can accumulate into
+  `totalCostUsd`, so this quirk can only be hit by calling the pure
+  functions directly with an adversarial value. Documented and locked in
+  with a test rather than "fixed", matching the established
+  graceful-degradation-by-design category (`isPrunable(status, NaN)` in
+  Agent Fleet, `brightnessToken(NaN)` in Breathing Border).
+- **`waxBar` degrades safely for `NaN` remaining/width**: both produce
+  `""` (not a crash, not corrupted glyphs) because `Math.round(NaN)` is
+  `NaN` and `String.prototype.repeat(NaN)` coerces to `repeat(0)` per
+  spec — same "NaN survives `.repeat()` harmlessly" shape Breathing
+  Border's hardening pass first documented for `pulsePosition`. A
+  non-integer width (e.g. `10.7`) also doesn't throw (`.repeat()` floors
+  the fractional remainder). One quirk *does* throw — `waxBar(x,
+  Infinity)` hits `.repeat(Infinity)`, which is a `RangeError` — but this
+  is unreachable in practice since the widget always calls it with the
+  hardcoded `WAX_BAR_WIDTH = 16` constant, never a value derived from
+  external input; left undocumented-in-code (no test asserts the throw)
+  since it can't happen through any real call site.
+- **`gutterEnvelope(NaN, ...)`** propagates `NaN` without crashing (same
+  category as the `Infinity` quirks above), and `gutterEnvelope(1,
+  Infinity)` correctly decays to `0` (an infinitely-idle candle reads as
+  fully calm) since the `elapsed >= GUTTER_DECAY_MS` branch is `true` for
+  `Infinity`.
+- **`formatUsd`** renders finite negative amounts verbatim (e.g. `-5` →
+  `"$-5.00"`, not clamped to `$0.00` — only *non-finite* amounts get the
+  `$0.00` fallback) and both `Infinity`/`-Infinity` correctly hit that
+  fallback.
+- **`CostCandleState.recordMessageCost`** ignores an infinite cost
+  (guarded, same as `NaN`/negative) but correctly accepts a `0` cost as a
+  real, free message — increments `messageCount` and leaves
+  `lastGutterPeakIntensity` at `0`, distinguishing "no message yet" from
+  "a message that cost nothing" was previously untested.
+- **Controller dispose/remount idempotency**: `dispose()` before any
+  message has ever mounted a widget is a safe no-op (no stray
+  `setWidget` call); `dispose()` called twice in a row after a mount is
+  idempotent (no double clear); and a `message_end` arriving after
+  `dispose()` correctly remounts a fresh widget (`#mount` resets to
+  `undefined` on teardown) — the same remount shape established by every
+  prior controller's hardening pass.
+- **A `NaN`-cost `message_end`** still mounts the widget on first sight
+  (the mount check runs unconditionally, independent of whether
+  `recordMessageCost` actually changed state) while leaving
+  `messageCount` at `0` — existing intended behavior, now covered rather
+  than assumed.
+
+One real bug found and fixed (`flameGlyph(NaN)` → literal `"undefined"`
+in rendered output, the sixth occurrence of this exact bug class this
+run, reached via a newly-discovered "unvalidated clock reading poisons
+state permanently" path); every other edge case degraded gracefully by
+design or is provably unreachable via the real pipeline.
+`bun test packages/coding-agent/test/cost-candle.test.ts`: 40 pass, 0
 fail. Root `bun run check` green across all workspaces after the fix.

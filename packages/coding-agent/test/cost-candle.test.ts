@@ -264,24 +264,25 @@ describe("cost candle widget lifecycle", () => {
 	});
 });
 
-describe("cost candle controller", () => {
-	function recordingContext(overrides: Partial<CostCandleContext> = {}): {
-		ctx: CostCandleContext;
-		calls: Array<{ key: string; content: unknown }>;
-	} {
-		const calls: Array<{ key: string; content: unknown }> = [];
-		const ctx: CostCandleContext = {
-			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
-			theme: idTheme,
-			setWidget: (key, content) => calls.push({ key, content }),
-			...overrides,
-		};
-		return { ctx, calls };
-	}
+/** Records every `setWidget` call a controller makes, for assertions across the controller and hardening describe blocks. */
+function recordingContext(overrides: Partial<CostCandleContext> = {}): {
+	ctx: CostCandleContext;
+	calls: Array<{ key: string; content: unknown }>;
+} {
+	const calls: Array<{ key: string; content: unknown }> = [];
+	const ctx: CostCandleContext = {
+		hasUI: true,
+		isTTY: true,
+		env: {},
+		motionSetting: "full",
+		theme: idTheme,
+		setWidget: (key, content) => calls.push({ key, content }),
+		...overrides,
+	};
+	return { ctx, calls };
+}
 
+describe("cost candle controller", () => {
 	it("mounts an animated widget on the first assistant message_end and mutates state in place afterward", () => {
 		const scheduler = manualScheduler();
 		const controller = new CostCandleController({ scheduler });
@@ -351,5 +352,123 @@ describe("cost candle controller", () => {
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
+	});
+});
+
+describe("cost candle hardening (edge cases)", () => {
+	it("flameGlyph(NaN) falls back to the dimmest glyph instead of returning undefined", () => {
+		// FLAME_GLYPHS[NaN] is undefined; the array-lookup fallback ('?? FLAME_GLYPHS[0]')
+		// keeps this on-ramp rather than corrupting the rendered row with 'undefined'.
+		expect(flameGlyph(Number.NaN)).toBe(flameGlyph(0));
+		expect(flameGlyph(Number.NaN)).not.toBeUndefined();
+	});
+
+	it("flameGlyph clamps out-of-range brightness (negative and >1) to the ramp's ends", () => {
+		expect(flameGlyph(-5)).toBe(flameGlyph(0));
+		expect(flameGlyph(5)).toBe(flameGlyph(1));
+	});
+
+	it("flameBrightness propagates NaN from either a NaN elapsedMs or a NaN gutterAmplitude, but never crashes downstream", () => {
+		expect(flameBrightness(Number.NaN, 0)).toBeNaN();
+		expect(flameBrightness(100, Number.NaN)).toBeNaN();
+		// The full render pipeline stays safe even with a NaN flame input, thanks to flameGlyph's fallback.
+		expect(() => flameGlyph(flameBrightness(Number.NaN, 0))).not.toThrow();
+	});
+
+	it("a NaN clock reading at record time poisons lastMessageAt, but rendering later stays safe (no 'undefined' in output)", () => {
+		// recordMessageCost only validates costUsd, not elapsedMs -- a NaN scheduler
+		// reading is stored verbatim and permanently NaNs msSinceTurn/gutterAmplitude
+		// on every subsequent render, until flameGlyph's fallback catches it.
+		const state = new CostCandleState();
+		state.recordMessageCost(GUTTER_REFERENCE_COST_USD, Number.NaN);
+		expect(state.snapshot().lastMessageAt).toBeNaN();
+
+		const row = renderCostCandleRow(state.snapshot(), 500, idTheme, "full");
+		expect(row).not.toContain("undefined");
+		expect(row).not.toContain("NaN");
+	});
+
+	it("waxBar degrades to an empty string (not a throw or corrupted glyphs) for a NaN remaining or NaN width", () => {
+		expect(waxBar(Number.NaN, 10)).toBe("");
+		expect(waxBar(0.5, Number.NaN)).toBe("");
+	});
+
+	it("waxBar clamps a negative remaining to a fully-burnt (all-empty) bar", () => {
+		const bar = waxBar(-3, 10);
+		expect(bar).toBe(waxBar(0, 10));
+	});
+
+	it("waxBar accepts a non-integer width without throwing (rounds the fill count, floors the remainder)", () => {
+		expect(() => waxBar(0.5, 10.7)).not.toThrow();
+		expect(waxBar(0.5, 10.7)).toHaveLength(10); // filled = round(5.35) = 5; repeat(5.7) floors to 5
+	});
+
+	it("gutterEnvelope propagates NaN from a NaN peakIntensity without throwing", () => {
+		expect(gutterEnvelope(Number.NaN, 0)).toBeNaN();
+		expect(() => flameBrightness(0, gutterEnvelope(Number.NaN, 0))).not.toThrow();
+	});
+
+	it("gutterEnvelope decays to 0 for an infinite msSinceTurn (long-idle candle reads as fully calm)", () => {
+		expect(gutterEnvelope(1, Number.POSITIVE_INFINITY)).toBe(0);
+	});
+
+	it("waxRemaining and gutterIntensity treat an infinite cost like a non-finite one (same early-return branch as NaN), not like a saturated maximum -- unreachable in practice since recordMessageCost already rejects non-finite costs before they reach here", () => {
+		expect(waxRemaining(Number.POSITIVE_INFINITY)).toBe(1); // reads as a *fresh* candle, not melted
+		expect(gutterIntensity(Number.POSITIVE_INFINITY)).toBe(0); // reads as *no* gutter, not maximal
+	});
+
+	it("formatUsd coerces negative and infinite amounts to $0.00 rather than rendering a malformed string", () => {
+		expect(formatUsd(-5)).toBe("$-5.00"); // finite negatives are rendered verbatim, not coerced
+		expect(formatUsd(Number.POSITIVE_INFINITY)).toBe("$0.00");
+		expect(formatUsd(Number.NEGATIVE_INFINITY)).toBe("$0.00");
+	});
+
+	it("recordMessageCost ignores an infinite cost but accepts a zero cost as a real (free) message", () => {
+		const state = new CostCandleState();
+		expect(state.recordMessageCost(Number.POSITIVE_INFINITY, 0)).toBe(false);
+		expect(state.recordMessageCost(0, 0)).toBe(true);
+		expect(state.snapshot()).toMatchObject({ messageCount: 1, totalCostUsd: 0, lastGutterPeakIntensity: 0 });
+	});
+
+	it("controller dispose before any mount is a safe no-op", () => {
+		const controller = new CostCandleController();
+		const { ctx, calls } = recordingContext();
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("controller dispose is idempotent after a mount", () => {
+		const scheduler = manualScheduler();
+		const controller = new CostCandleController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onMessageEnd(assistantMessageEnd(0.02), ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(callsAfterFirstDispose); // second dispose is a no-op, no extra setWidget calls
+	});
+
+	it("controller remounts a fresh widget for a message_end that arrives after dispose", () => {
+		const scheduler = manualScheduler();
+		const controller = new CostCandleController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onMessageEnd(assistantMessageEnd(0.02), ctx);
+		controller.dispose(ctx);
+		expect(calls[calls.length - 1].content).toBeUndefined();
+
+		controller.onMessageEnd(assistantMessageEnd(0.03), ctx);
+		expect(calls[calls.length - 1].content).not.toBeUndefined();
+		expect(typeof calls[calls.length - 1].content).toBe("function");
+	});
+
+	it("a NaN-cost or negative-cost message_end still mounts the widget on first sight, without corrupting state", () => {
+		const controller = new CostCandleController();
+		const { ctx, calls } = recordingContext();
+
+		controller.onMessageEnd(assistantMessageEnd(Number.NaN), ctx);
+		expect(calls).toHaveLength(1); // mounts even though the sample was ignored by state
+		expect(controller.state.snapshot().messageCount).toBe(0);
 	});
 });

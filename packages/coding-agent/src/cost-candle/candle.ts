@@ -70,7 +70,7 @@ const FLAME_GLYPHS = ["˚", "∴", "▲", "♦"] as const;
 export function flameGlyph(brightness: number): string {
 	const clamped = brightness <= 0 ? 0 : brightness >= 1 ? 1 : brightness;
 	const index = Math.min(FLAME_GLYPHS.length - 1, Math.floor(clamped * FLAME_GLYPHS.length));
-	return FLAME_GLYPHS[index];
+	return FLAME_GLYPHS[index] ?? FLAME_GLYPHS[0];
 }
 
 const WAX_FULL_GLYPH = "█";
