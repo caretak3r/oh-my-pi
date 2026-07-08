@@ -50,7 +50,7 @@ const RING_GLYPHS = [" ", "·", "∘", "○", "◉"] as const;
 export function ringGlyph(brightness: number): string {
 	const clamped = brightness <= 0 ? 0 : brightness >= 1 ? 1 : brightness;
 	const index = Math.min(RING_GLYPHS.length - 1, Math.floor(clamped * RING_GLYPHS.length));
-	return RING_GLYPHS[index];
+	return RING_GLYPHS[index] ?? RING_GLYPHS[0];
 }
 
 /**

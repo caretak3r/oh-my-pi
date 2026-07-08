@@ -128,6 +128,43 @@ describe("reflection ripple pure math", () => {
 	});
 });
 
+describe("reflection ripple pure math edge cases", () => {
+	it("rippleProgress guards non-finite inputs: NaN durationMs/elapsedMs don't crash", () => {
+		expect(rippleProgress(500, Number.NaN)).toBeNaN();
+		expect(rippleProgress(Number.NaN, 1000)).toBeNaN();
+		expect(rippleProgress(Number.POSITIVE_INFINITY, 1000)).toBe(1);
+		expect(rippleProgress(500, -100)).toBe(1); // durationMs <= 0 short-circuits to fully-faded
+	});
+
+	it("rippleRadius clamps a negative maxRadius to 0 rather than a negative distance", () => {
+		expect(rippleRadius(0.5, -10)).toBe(0);
+		expect(rippleRadius(0.5, 0)).toBe(0);
+	});
+
+	it("rippleRadius(NaN, ...) and rippleBrightness(NaN) propagate NaN rather than throwing", () => {
+		expect(rippleRadius(Number.NaN, 10)).toBeNaN();
+		expect(rippleBrightness(Number.NaN)).toBeNaN();
+		expect(rippleBrightness(Number.POSITIVE_INFINITY)).toBe(0); // clamped to progress=1, fully faded
+	});
+
+	it("ringGlyph(NaN) falls back to the faintest glyph instead of returning undefined (regression)", () => {
+		expect(ringGlyph(Number.NaN)).toBe(" ");
+		expect(ringGlyph(Number.POSITIVE_INFINITY)).toBe("◉"); // clamps to brightness 1
+		expect(ringGlyph(Number.NEGATIVE_INFINITY)).toBe(" "); // clamps to brightness 0
+	});
+
+	it("reflectDimAmount(NaN, ...) propagates NaN rather than throwing; negative durationMs reads as settled", () => {
+		expect(reflectDimAmount(Number.NaN, DIM_DURATION_MS)).toBeNaN();
+		expect(reflectDimAmount(500, -1)).toBe(0);
+	});
+
+	it("dimMultiplier(NaN) propagates NaN rather than clamping to a safe multiplier", () => {
+		expect(dimMultiplier(Number.NaN)).toBeNaN();
+		expect(dimMultiplier(-5)).toBe(1); // clamped to dimAmount 0, untouched brightness
+		expect(dimMultiplier(Number.POSITIVE_INFINITY)).toBeCloseTo(0.35, 5); // clamped to dimAmount 1
+	});
+});
+
 describe("reflection ripple pure rendering", () => {
 	it("at birth (elapsedMs 0), full tier draws a single centered glyph — the wave hasn't expanded yet", () => {
 		const row = renderReflectionRippleRow(0, 11, taggedTheme, "full");
@@ -181,6 +218,18 @@ describe("reflection ripple pure rendering", () => {
 		expect(renderReflectionRippleOffText(["no-any"])).toBe("↺ reflecting: no-any");
 		expect(renderReflectionRippleOffText(["a", "b"])).toBe("↺ reflecting: a, b");
 	});
+
+	it("a NaN elapsedMs (e.g. a poisoned clock read) never renders the literal string 'undefined'", () => {
+		const full = renderReflectionRippleRow(Number.NaN, 21, taggedTheme, "full");
+		const subtle = renderReflectionRippleRow(Number.NaN, 21, taggedTheme, "subtle");
+		expect(full).not.toContain("undefined");
+		expect(subtle).not.toContain("undefined");
+	});
+
+	it("negative width renders an empty row, matching the width <= 0 guard", () => {
+		expect(renderReflectionRippleRow(500, -5, taggedTheme, "full")).toBe("");
+		expect(renderReflectionRippleIdleRow(-5, idTheme)).toBe("");
+	});
 });
 
 describe("ReflectionRippleState", () => {
@@ -221,6 +270,27 @@ describe("ReflectionRippleState", () => {
 	it("settleIfDone on an already-idle state is a no-op", () => {
 		const state = new ReflectionRippleState();
 		expect(state.settleIfDone(10_000)).toBe(false);
+	});
+
+	it("rippleElapsedMs clamps backward clock skew (now before triggeredAt) to 0, not a negative value", () => {
+		const state = new ReflectionRippleState();
+		state.applyTrigger(["r"], 1000);
+		expect(state.rippleElapsedMs(400)).toBe(0);
+	});
+
+	it("a NaN clock read at trigger time poisons rippleElapsedMs, causing settleIfDone to fire on the very next check (NaN < SETTLE_MS is false, so the early-return guard never catches it)", () => {
+		const state = new ReflectionRippleState();
+		state.applyTrigger(["r"], Number.NaN);
+		expect(state.rippleElapsedMs(10_000)).toBeNaN();
+		expect(state.settleIfDone(10_000)).toBe(true);
+		expect(state.phase).toBe("idle");
+	});
+
+	it("applyTrigger accepts an empty rule-names array without throwing", () => {
+		const state = new ReflectionRippleState();
+		state.applyTrigger([], 0);
+		expect(state.snapshot().ruleNames).toEqual([]);
+		expect(state.phase).toBe("rippling");
 	});
 });
 
@@ -384,6 +454,49 @@ describe("ReflectionRippleWidget", () => {
 		expect(host.subscriberCount).toBe(0);
 		expect(widget.render(20)[0]).toBe(renderReflectionRippleIdleRow(20, idTheme));
 	});
+
+	it("disposing twice is a no-op the second time (idempotent teardown)", () => {
+		const scheduler = manualScheduler();
+		const policy = new MotionPolicy(fullEnv, "full");
+		const host = new AnimationHost({ policy, scheduler });
+		const state = new ReflectionRippleState();
+		const tui = new ToggleTui();
+		const widget = new ReflectionRippleWidget({
+			tui,
+			host,
+			policy,
+			state,
+			theme: idTheme,
+			clock: scheduler,
+			onSettled: () => {},
+		});
+		widget.render(20);
+		widget.dispose();
+		expect(host.subscriberCount).toBe(0);
+		expect(() => widget.dispose()).not.toThrow();
+		expect(host.subscriberCount).toBe(0);
+	});
+
+	it("a NaN clock reading never surfaces the literal string 'undefined' in a rendered frame", () => {
+		const scheduler = manualScheduler();
+		const policy = new MotionPolicy(fullEnv, "full");
+		const host = new AnimationHost({ policy, scheduler });
+		const state = new ReflectionRippleState();
+		state.applyTrigger(["r"], Number.NaN);
+		const tui = new ToggleTui();
+		const widget = new ReflectionRippleWidget({
+			tui,
+			host,
+			policy,
+			state,
+			theme: idTheme,
+			clock: scheduler,
+			onSettled: () => {},
+		});
+		const frame = widget.render(20)[0];
+		expect(frame).not.toContain("undefined");
+		widget.dispose();
+	});
 });
 
 describe("reflection ripple controller", () => {
@@ -492,5 +605,37 @@ describe("reflection ripple controller", () => {
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
+	});
+
+	it("dispose before any trigger (never mounted) is a safe no-op", () => {
+		const controller = new ReflectionRippleController();
+		const { ctx, calls } = recordingContext();
+
+		expect(() => controller.dispose(ctx)).not.toThrow();
+		expect(calls).toHaveLength(0);
+	});
+
+	it("disposing twice is idempotent — the second call doesn't re-clear the widget", () => {
+		const scheduler = manualScheduler();
+		const controller = new ReflectionRippleController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [rule("a")] }, ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+
+		expect(() => controller.dispose(ctx)).not.toThrow();
+		expect(calls).toHaveLength(callsAfterFirstDispose);
+	});
+
+	it("an empty rules array still triggers a ripple with no rule names", () => {
+		const scheduler = manualScheduler();
+		const controller = new ReflectionRippleController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [] }, ctx);
+		expect(calls).toHaveLength(1);
+		expect(controller.state.snapshot().ruleNames).toEqual([]);
+		expect(controller.state.phase).toBe("rippling");
 	});
 });

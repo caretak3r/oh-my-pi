@@ -1185,7 +1185,7 @@ the pass is resumable across iterations.
 | 5 | Breathing Border | ✅ done | oh-my-pi-bw0 |
 | 6 | Agent Fleet | ✅ done | oh-my-pi-nv4 |
 | 7 | Cost Candle | ✅ done | oh-my-pi-0a2 |
-| 8 | Reflection Ripple | ⬜ pending | — |
+| 8 | Reflection Ripple | ✅ done | oh-my-pi-cdc |
 | 9 | Memory Crystals | ⬜ pending | — |
 | 10 | Context Constellation | ⬜ pending | — |
 | 11 | Diff Bloom | ⬜ pending | — |
@@ -1645,3 +1645,70 @@ state permanently" path); every other edge case degraded gracefully by
 design or is provably unreachable via the real pipeline.
 `bun test packages/coding-agent/test/cost-candle.test.ts`: 40 pass, 0
 fail. Root `bun run check` green across all workspaces after the fix.
+
+### 8. Reflection Ripple — hardening notes
+
+Added 22 edge-case behavioral tests to
+`packages/coding-agent/test/reflection-ripple.test.ts` (47 total, up from
+25), covering `ripple.ts`'s pure progress/radius/brightness/glyph/dim
+math under adversarial (`NaN`/`Infinity`/negative) inputs,
+`ReflectionRippleState`'s clock-skew edge cases, and widget/controller
+dispose idempotency:
+
+- **Real bug found and fixed**: `ringGlyph` had the exact same
+  missing-fallback shape as every prior glyph-ramp bug this run has
+  found (Session Bonsai's `budGlyph`, Todo Meteors'
+  `meteorGlyph`/`emberGlyph`, Breathing Border's `brightnessGlyph`,
+  Agent Fleet's `fireflyGlyph`, Cost Candle's `flameGlyph`) — this is the
+  **seventh** occurrence. `ringGlyph`'s own clamp (`brightness <= 0 ? 0 :
+  brightness >= 1 ? 1 : brightness`) leaves `NaN` unclamped (neither
+  branch is true for `NaN`), so `Math.floor(NaN * RING_GLYPHS.length)`
+  is `NaN` and `RING_GLYPHS[NaN]` is `undefined`. `NaN` is genuinely
+  reachable through the real pipeline: `reflectDimAmount(NaN, ...)` and
+  `rippleBrightness(rippleProgress(NaN, ...))` both propagate `NaN`
+  straight through to `ringGlyph` when the controller's injected clock
+  (`this.#scheduler.now()`) or `applyTrigger`'s `now` argument is
+  itself `NaN` at trigger time. Fixed with the same `?? RING_GLYPHS[0]`
+  pattern as all six prior fixes.
+- **A genuinely new, surprising `NaN`-clock consequence** (distinct from
+  every prior feature's "permanently poisons state" finding): triggering
+  with a `NaN` timestamp does **not** cause `settleIfDone` to hang
+  forever. `settleIfDone`'s early-return guard is `if
+  (this.rippleElapsedMs(now) < SETTLE_MS) return false` — and since
+  `NaN < SETTLE_MS` is `false` for any `SETTLE_MS`, the guard never
+  triggers, so the very next `settleIfDone` call falls straight through
+  to the success path and settles the ripple to `idle` immediately.
+  A `NaN`-poisoned "wait until enough time has passed" guard written as
+  `if (elapsed < threshold) return early` is backwards for `NaN` — it
+  reads as "already past the threshold," not "wait forever" as the
+  cadence-equalizer/cost-candle "clock poisons state" precedent might
+  suggest. Worth checking this exact guard shape (`<`-comparison used as
+  a *stay-pending* gate) on any remaining feature, since it's the
+  opposite failure mode from a `<=`/`>=`-comparison clamp (which lets
+  `NaN` through unclamped).
+- **`rippleRadius`/`rippleBrightness`/`dimMultiplier`/`reflectDimAmount`
+  all propagate `NaN` without crashing** (comparison-chain/clamp logic,
+  not array lookups) — same graceful-degradation category as every
+  prior feature's non-glyph-lookup quirks (`isPrunable(status, NaN)` in
+  Agent Fleet, `brightnessToken(NaN)` in Breathing Border,
+  `gutterEnvelope(NaN, ...)` in Cost Candle).
+- **`rippleRadius` correctly clamps a negative or zero `maxRadius` to
+  `0`** rather than a negative distance, and `Infinity` inputs to
+  `rippleProgress`/`rippleBrightness`/`ringGlyph` all clamp to their
+  "fully expanded/faded" extreme rather than producing a different
+  quirk.
+- **`ReflectionRippleState.rippleElapsedMs` clamps backward clock skew**
+  (`now` before `triggeredAt`) to `0` via its existing `Math.max(0, ...)`
+  guard — already correct, now covered rather than assumed.
+- **Controller dispose idempotency**: `dispose()` before any trigger has
+  ever mounted a widget is a safe no-op; `dispose()` called twice in a
+  row after a mount is idempotent (no double clear); an empty
+  `rules: []` array on `ttsr_triggered` still mounts and ripples with an
+  empty rule-names snapshot rather than throwing.
+
+No other real bugs found — every remaining edge case (negative width,
+an empty rule-names array, widget-level double dispose) degraded
+gracefully by design.
+`bun test packages/coding-agent/test/reflection-ripple.test.ts`: 47
+pass, 0 fail. Root `bun run check` green across all workspaces after the
+fix.
