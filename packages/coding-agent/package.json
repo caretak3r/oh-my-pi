@@ -119,6 +119,14 @@
       "types": "./src/*.ts",
       "import": "./src/*.ts"
     },
+    "./agent-fleet": {
+      "types": "./src/agent-fleet/index.ts",
+      "import": "./src/agent-fleet/index.ts"
+    },
+    "./agent-fleet/*": {
+      "types": "./src/agent-fleet/*.ts",
+      "import": "./src/agent-fleet/*.ts"
+    },
     "./async": {
       "types": "./src/async/index.ts",
       "import": "./src/async/index.ts"

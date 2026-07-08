@@ -308,6 +308,83 @@ no new settings-schema entries.
 
 ## Next 10 ideas
 
-Not started for any idea yet. All five ranked Wave 2 features are now
-implemented, tested, and green — next iterations begin exploring
-`IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" ranked ideas.
+### 6. 🪰 Agent Fleet (oh-my-pi-4e8)
+
+**Status:** done.
+
+**Module:** `packages/coding-agent/src/agent-fleet/` (`firefly.ts`, `state.ts`,
+`widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createAgentFleetExtension` pushed as a sixth inline extension in
+`sdk.ts` (`createAgentSession`), alongside the five ranked Wave 2 features.
+Subscribes on `session_start` and unsubscribes on `session_shutdown`. Reuses
+the existing shared `animations` setting; no new settings-schema entries.
+New `./agent-fleet` and `./agent-fleet/*` package.json export paths.
+
+**Test command:** `bun test packages/coding-agent/test/agent-fleet.test.ts`
+— 37 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- **Re-grounded the signal.** The idea doc's original grounding ("`Agent`-tool
+  `tool_call`s + agent lifecycle") doesn't hold up: the `Agent`/`task` tool's
+  own events only bookend a subagent's lifetime and carry no notion of
+  `idle` vs `parked` vs `aborted`. The actual authoritative, already-live
+  signal is `registry/agent-registry.ts`'s `AgentRegistry` — every subagent
+  spawn/finish/abort already flows through `AgentRegistry.register()` /
+  `.setStatus()` (see `task/executor.ts`), and `AgentRegistry.onChange(...)`
+  gives a real event stream (`registered`/`status_changed`/`removed`) with
+  exactly the states the bead's "bright/fade/red-blink" metaphor needs.
+- **Not an `ExtensionContext` event.** Unlike every other Wave 2 feature,
+  this signal isn't part of the extension event union — `AgentRegistry` is a
+  direct process-global singleton, the same seam `collab/host.ts` and
+  `modes/controllers/tan-command-controller.ts` already read from. The
+  controller takes the registry as an injected `AgentFleetRegistrySource`
+  (structurally just `onChange`), defaulting to `AgentRegistry.global()`
+  only at the `index.ts` wiring site — tests never touch the real
+  process-global singleton, using an in-memory fake instead.
+- **One captured context, not one per event.** Every other Wave 2 controller
+  rebuilds its mapped `XContext` fresh on every `ctx.on(...)` callback (since
+  `ExtensionContext` is reconstructed per dispatch — see
+  `extensions/runner.ts#createContext`). Registry events fire independently
+  of the extension dispatch loop, so there's no fresh `ctx` available when
+  one arrives. The controller instead captures one mapped context from
+  `session_start` (fired once, early) and reuses it for the life of the
+  subscription — safe because `ctx.ui` is the same stable object underneath
+  every `createContext()` call, so a `setWidget` closure captured once still
+  routes to the live UI much later. Confirmed by reading `runner.ts`:
+  `ui: this.#uiContext` is a stable per-runner field, not rebuilt per call.
+- **Scoped to all live subagents, not just this session's direct children.**
+  `AgentRegistry` is process-wide, so in principle a session could filter to
+  only its own `parentId` subtree. `ExtensionContext` doesn't expose "my own
+  agent id" to make that filter possible cheaply, and — more importantly —
+  the codebase already has a precedent for the simpler, unscoped choice:
+  `modes/running-subagent-badge.ts`'s existing subagent-count badge filters
+  only on `kind === "sub"`, with no parent scoping either. Agent Fleet
+  mirrors that same convention rather than inventing a stricter one.
+- **"Drifting" is a bounded per-firefly wobble, not a 2D roaming field.**
+  Tool Constellation already claimed the "spatial grid" visual; to stay
+  legible in a thin strip and keep frames byte-stable/testable, each firefly
+  gets a fixed-width 3-column cell and wobbles left/center/right within it
+  (a sine wave phase-offset by an FNV-1a hash of the agent id, so fireflies
+  don't move in lockstep) — plus a breathing/fading/blinking brightness
+  curve per status. This reads as "alive and drifting" without a full
+  pixel-position canvas.
+- `idle` and `parked` (`AgentStatus`) both map to the same `done` firefly
+  visual — the revivable-vs-not distinction has no useful visual analog here.
+  `status_changed`/`registered` for an unseen id upserts implicitly (treated
+  as a first sighting) so a controller that started watching mid-flight (or
+  missed an earlier event) still converges instead of staying silently wrong.
+  `removed` deletes immediately, bypassing any fade — it's a hard teardown
+  signal, not a status the fade/blink curves apply to.
+- Reuses the existing `statusLineSubagents` theme color (already the color
+  of the status-line's live subagent-count badge) for `working` fireflies,
+  rather than inventing a new color — same concept, same color.
+
+## Ideas not yet started
+
+Ideas 7–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Cost Candle,
+Reflection Ripple, Memory Crystals, Context Constellation, Diff Bloom,
+Cadence Equalizer, Goal Horizon, Model Weather Vane, Prompt Charge) remain
+unstarted.
