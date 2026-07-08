@@ -298,6 +298,66 @@ describe("tool constellation widget lifecycle", () => {
 	});
 });
 
+describe("tool constellation edge cases", () => {
+	it("shares a cell without crashing once distinct tool names exceed the grid capacity", () => {
+		const state = new ConstellationState();
+		// GRID_CELLS names always land on free cells; the (GRID_CELLS + 1)th must share.
+		for (let i = 0; i <= GRID_CELLS; i++) {
+			state.recordFire(`tool-${i}`, i * 10);
+		}
+		const snapshot = state.snapshot();
+		expect(snapshot.stars).toHaveLength(GRID_CELLS + 1);
+		const cells = snapshot.stars.map(s => s.cell);
+		const distinctCells = new Set(cells);
+		expect(distinctCells.size).toBeLessThanOrEqual(GRID_CELLS); // at least one collision forced
+		// Rendering a saturated field must not throw, and stays exactly 3 rows.
+		const rows = renderConstellationGrid(snapshot, GRID_CELLS * 10, idTheme, "full");
+		expect(rows).toHaveLength(3);
+	});
+
+	it("hashCell and categorizeTool tolerate an empty tool name without throwing", () => {
+		expect(() => hashCell("")).not.toThrow();
+		expect(hashCell("")).toBeGreaterThanOrEqual(0);
+		expect(hashCell("")).toBeLessThan(GRID_CELLS);
+		expect(categorizeTool("")).toBe("other");
+	});
+
+	it("starBrightness treats a negative msSinceFire (clock skew) as still within the flare hold", () => {
+		expect(starBrightness(-50)).toBe(1);
+	});
+
+	it("renderConstellationGrid on a never-fired empty snapshot draws an all-dim field with no comet/ley-line", () => {
+		const rows = renderConstellationGrid(
+			{ stars: [], lastFired: undefined, previousFired: undefined },
+			0,
+			idTheme,
+			"full",
+		);
+		expect(rows).toHaveLength(3);
+		expect(rows.join("")).not.toContain("☄");
+		expect(rows.join("")).not.toContain("─");
+	});
+
+	it("controller dispose is idempotent: a second call is a no-op, not a double clear", () => {
+		const scheduler = manualScheduler();
+		const controller = new ToolConstellationController({ scheduler });
+		const calls: Array<{ key: string; content: unknown }> = [];
+		const ctx: ToolConstellationContext = {
+			hasUI: true,
+			isTTY: true,
+			env: {},
+			motionSetting: "full",
+			theme: idTheme,
+			setWidget: (key, content) => calls.push({ key, content }),
+		};
+		controller.onToolCall(toolCallEvent("bash"), ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+		controller.dispose(ctx); // must not throw, and must not emit another setWidget clear
+		expect(calls).toHaveLength(callsAfterFirstDispose);
+	});
+});
+
 describe("tool constellation controller", () => {
 	function recordingContext(
 		_scheduler: FrameScheduler,

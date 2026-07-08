@@ -1166,3 +1166,68 @@ are now implemented, each as its own atomic commit with behavioral tests, a
 green `bun check`, and a filed+closed bead. Remaining work per the run's
 stop condition: an edge-case hardening pass over every earlier feature, and
 an integration/gallery demo if feasible.
+
+## Hardening pass
+
+Per-feature edge-case hardening tracker. Each entry gets a dedicated pass:
+re-read the module for un-tested boundary conditions (empty/zero state,
+saturation, clock skew, malformed/adversarial input, idempotent
+mount/dispose) and add behavioral tests — fixing any real bug found along
+the way, not just padding coverage. Tracked as its own bead per feature so
+the pass is resumable across iterations.
+
+| # | Feature | Status | Bead |
+|---|---|---|---|
+| 1 | Tool Constellation | ✅ done | oh-my-pi-rxf |
+| 2 | Token Tide | ⬜ pending | — |
+| 3 | Session Bonsai | ⬜ pending | — |
+| 4 | Todo Meteors | ⬜ pending | — |
+| 5 | Breathing Border | ⬜ pending | — |
+| 6 | Agent Fleet | ⬜ pending | — |
+| 7 | Cost Candle | ⬜ pending | — |
+| 8 | Reflection Ripple | ⬜ pending | — |
+| 9 | Memory Crystals | ⬜ pending | — |
+| 10 | Context Constellation | ⬜ pending | — |
+| 11 | Diff Bloom | ⬜ pending | — |
+| 12 | Cadence Equalizer | ⬜ pending | — |
+| 13 | Goal Horizon | ⬜ pending | — |
+| 14 | Model Weather Vane | ⬜ pending | — |
+| 15 | Prompt Charge | ⬜ pending | — |
+
+### 1. Tool Constellation — hardening notes
+
+Added 5 edge-case behavioral tests to
+`packages/coding-agent/test/tool-constellation.test.ts` (28 total, up from
+23), covering paths the original spec-driven suite didn't reach:
+
+- **Grid saturation**: firing `GRID_CELLS + 1` (31) distinct tool names
+  forces at least one cell collision. `assignCell`'s documented fallback
+  ("share the hashed cell rather than losing the star") was previously
+  asserted only in a doc comment, never exercised — confirmed it doesn't
+  throw, keeps exactly 3 rendered rows, and the render layer's
+  last-inserted-wins-per-cell behavior (via `starAt.set(star.cell, ...)`
+  in `widget.ts`) is the de facto collision resolution, silently dropping
+  the older star's glyph from that frame. No bug: documented as expected
+  degradation for sessions using more than 30 distinct tool names (highly
+  unlikely in practice — MCP bridge tools are the most likely source of a
+  long tail).
+- **Empty tool name**: `hashCell("")` and `categorizeTool("")` both resolve
+  cleanly (`"other"` bucket, in-range hash) rather than throwing — matters
+  because `toolName` is an extension-facing string with no non-empty
+  invariant enforced at the `ToolCallEvent` boundary.
+- **Negative `msSinceFire`**: a render clock reading earlier than a star's
+  `lastFireAt` (theoretically possible only if the widget's injected clock
+  ever diverged from the controller's) is treated as still within the flare
+  hold window (`<=` comparison in `starBrightness` includes negatives) —
+  confirmed rather than assumed.
+- **Empty/never-fired snapshot**: rendering with zero stars produces a
+  fully-dim 3-row field with no comet glyph or ley-line, not a crash or
+  malformed output.
+- **Idempotent dispose**: calling `ToolConstellationController.dispose`
+  twice does not emit a second `setWidget(..., undefined, ...)` clear or
+  throw — the existing `if (!this.#mount) return;` guard was correct but
+  untested.
+
+No behavior changes were needed — every edge case degrades gracefully by
+design. `bun test packages/coding-agent/test/tool-constellation.test.ts`:
+28 pass, 0 fail. `bun check`: green.
