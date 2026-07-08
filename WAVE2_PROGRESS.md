@@ -770,8 +770,95 @@ the same guard.
   construction (same structural mount-sequence limitation documented
   throughout this file).
 
+## 12. 🎚️ Cadence Equalizer (oh-my-pi-7wc)
+
+**Status:** done.
+
+**Grounding:** the idea doc says "a tiny status-line VU equalizer dancing to
+`tokensPerSecond` (a lighter cousin of Token Tide for the status line
+only)." `tokensPerSecond` is real and already battle-tested —
+`calculateTokensPerSecond` (`modes/components/status-line/token-rate.ts`)
+is the exact provider Token Tide (feature #2) already samples every frame,
+and there is no separate "status line" widget placement for extensions to
+mount into: `WidgetPlacement` is only `"aboveEditor" | "belowEditor"`
+(`extensibility/extensions/types.ts:156`) — the idea doc's "status line
+only" framing describes the intended *look* (a compact single line), not a
+distinct architectural surface.
+
+**Overlap risk, checked before wiring anything:** unlike the
+context-weather/compaction-vacuum cousins (which lived on separate,
+unmerged branches and were structurally distinct signals/shapes), Token
+Tide's `subtle` tier (`token-tide/widget.ts`'s `renderVuBar`) is *already*
+"a single pulsing VU bar sized to the current tok/s rate," and its `full`
+tier is already a scrolling multi-column waveform of historical samples —
+both tiers of the literal "VU equalizer for tok/s" concept are already
+shipped. Building Cadence Equalizer as a re-skin of either tier would be
+shipping a duplicate feature under a new name, which fails this run's
+"verify the signal is real" gate applied honestly (the signal is real, but
+a re-skinned feature is not distinct). Cadence Equalizer therefore ships
+with a genuinely different rendering *algorithm*, not just a different
+glyph set: `BAND_COUNT` (5) independent bands, each an exponential moving
+average of the *same* `tokensPerSecond` reading tuned to a different
+`BAND_ALPHAS` reaction speed (`0.55` fastest → `0.05` slowest,
+`cadence-equalizer/bars.ts`) — a burst hits the fast band first (tall,
+jittery) while the slow band lags and smooths, so the bars visibly move
+*relative to each other* rather than in lockstep like one filled bar would.
+Each band also keeps a peak-hold marker (`stepPeak`: snaps up on a new
+high, decays linearly by `PEAK_DECAY_PER_FRAME` otherwise) — a classic
+hardware VU-meter cue that has no equivalent anywhere in Token Tide.
+Reuses Token Tide's `token-tide/scale.ts` bucket palette
+(`normalizeAmplitude`, `rateBucket`, `BUCKET_THEME_COLOR`, `waveGlyph`)
+verbatim rather than inventing a parallel one, so the two cousins share one
+color language by design.
+
+**Module:** `packages/coding-agent/src/cadence-equalizer/` (`bars.ts`,
+`state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createCadenceEqualizerExtension` pushed as a twelfth inline
+extension in `sdk.ts` (`createAgentSession`), subscribed to
+`message_start`/`message_update`/`message_end` — the identical event
+triple Token Tide subscribes to, since both sample the same underlying
+provider. Widget placed `belowEditor` (evens the aboveEditor/belowEditor
+split from 6/5 to 6/6, and keeps this ambient meter physically apart from
+Token Tide's `aboveEditor` mount rather than stacking two tok/s widgets on
+the same edge). Reuses the existing shared `animations` setting; no new
+settings-schema entries. New `./cadence-equalizer` and
+`./cadence-equalizer/*` package.json export paths.
+
+**Test command:**
+`bun test packages/coding-agent/test/cadence-equalizer.test.ts` — 29 pass,
+0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- Controller/widget lifecycle (mount-on-first-`message_start`, in-flight
+  tracking across `message_update`, clear-on-`message_end`, `off`-tier
+  static repaint, dispose semantics) is copied structurally from
+  `token-tide/controller.ts` — the two features share an event surface and
+  a signal provider by design, so re-deriving the same wiring would be
+  pure duplication risk, not independence. Only the *rendering*
+  (`bars.ts`/`state.ts`/`widget.ts`'s render functions) is new.
+- `full` tier renders one row: each band is a peak-cap column (`‾` in the
+  `burst` bucket's theme color when the band has decayed `>= 0.03` below
+  its held peak, else blank) followed by an amplitude glyph column off the
+  same `WAVE_GLYPHS` ramp Token Tide uses, separated by blank spacer
+  columns between bands.
+- `subtle` tier collapses to a compact strip: just the `BAND_COUNT`
+  amplitude glyphs concatenated with no spacing or peak caps, sized to fit
+  a status-line-width slot — the literal "for the status line only"
+  framing, honored in the compact tier's shape even though the mount point
+  is the same `belowEditor` widget slot as every other tier.
+- EMA/peak stepping is fixed-step (one `stepBands` call per animation
+  frame, not time-scaled by `elapsedMs`), matching Token Tide's
+  `pushSample`-once-per-frame convention — deliberately not
+  reimplementing time-scaled smoothing for a purely cosmetic meter.
+- Off-tier fallback: `"eq -- "`/`"eq N tok/s"`, a distinct text function
+  (`renderEqualizerText`) from Token Tide's `renderTokenRateText`, per this
+  run's per-feature-owns-its-off-tier-renderer convention (established
+  since feature #1) even though the two strings are shaped similarly.
+
 ## Ideas not yet started
 
-Ideas 12–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Cadence
-Equalizer, Goal Horizon, Model Weather Vane, Prompt Charge) remain
-unstarted.
+Ideas 13–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Goal Horizon,
+Model Weather Vane, Prompt Charge) remain unstarted.
