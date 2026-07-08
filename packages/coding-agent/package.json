@@ -548,6 +548,14 @@
       "types": "./src/task/*.ts",
       "import": "./src/task/*.ts"
     },
+    "./todo-meteors": {
+      "types": "./src/todo-meteors/index.ts",
+      "import": "./src/todo-meteors/index.ts"
+    },
+    "./todo-meteors/*": {
+      "types": "./src/todo-meteors/*.ts",
+      "import": "./src/todo-meteors/*.ts"
+    },
     "./token-tide": {
       "types": "./src/token-tide/index.ts",
       "import": "./src/token-tide/index.ts"

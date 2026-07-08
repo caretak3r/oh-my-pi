@@ -1844,6 +1844,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		inlineExtensions.push((await import("./tool-constellation")).createToolConstellationExtension);
 		inlineExtensions.push((await import("./token-tide")).createTokenTideExtension);
 		inlineExtensions.push((await import("./session-bonsai")).createSessionBonsaiExtension);
+		inlineExtensions.push((await import("./todo-meteors")).createTodoMeteorsExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}

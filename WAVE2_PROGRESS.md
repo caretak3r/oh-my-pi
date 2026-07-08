@@ -164,7 +164,70 @@ shared `animations` setting; no new settings-schema entries.
 
 ## 4. ☄️ Todo Meteors (oh-my-pi-060)
 
-**Status:** not started.
+**Status:** done.
+
+**Module:** `packages/coding-agent/src/todo-meteors/` (`ember.ts`,
+`state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createTodoMeteorsExtension` pushed as an inline extension in
+`sdk.ts` (`createAgentSession`), subscribed to `tool_result` (filtered to
+the `todo` tool) and `todo_reminder`. Widget placed `aboveEditor` per the
+bead. Reuses the existing shared `animations` setting; no new
+settings-schema entries.
+
+**Test command:** `bun test packages/coding-agent/test/todo-meteors.test.ts`
+— 31 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations (grounding-signal deviation from
+the bead — documented per the "verify each grounding signal is real" rule):**
+- The bead names `todo_reminder`'s `todos` array as the diff source for
+  completions. Verified against `agent-session.ts` (`#checkTodoCompletion`,
+  ~line 11245): that array is `incomplete` — the engine pre-filters it to
+  `pending`/`in_progress` tasks only, and the event fires only when the agent
+  *stops with incomplete work* (a nag, capped by `todo.reminders.max`). A
+  session where the agent completes every todo without ever pausing on an
+  incomplete one would never fire a single `todo_reminder`, so relying on it
+  alone would leave the ember row permanently empty and no meteor would ever
+  launch in the common "everything went fine" case — the opposite of
+  "celebratory."
+- The actual primary signal is the `todo` tool's own `tool_result` event:
+  `details.phases` (full status list, all four statuses) plus
+  `details.completedTasks` — a `{phase, content}[]` diff the engine itself
+  computes via `getCompletionTransitions` in `tools/todo.ts` and already uses
+  to drive the strike-through animation in the todo list UI. This is a
+  strictly stronger, more-frequently-firing, already-battle-tested signal, so
+  the controller reuses it verbatim instead of re-deriving completions from a
+  second, possibly-diverging phase-to-phase diff of its own. `todo_reminder`
+  is still wired, but only for what it uniquely provides: `attempt`/
+  `maxAttempts` reminder pressure, which drives the urgency pulse.
+- `TodoItem` carries only `{content, status}` in this codebase — no `id`, no
+  `priority` field, despite the bead's "keyed by todo id" / "brightness by
+  priority" language. Identity uses the same `phase\0content` composite key
+  `tools/todo.ts`'s own `getCompletionTransitions` uses internally (no `id`
+  field exists to key on). "Priority" is reinterpreted as status ranking
+  (`in_progress` brighter than `pending`), matching the todo tool's own
+  existing `accent`/`dim` status-coloring convention — the closest real
+  analog available, not an invented field.
+- Tasks that leave the incomplete set without a matching `completedTasks`
+  entry (abandoned, or removed by an `rm`/`init` op) are dropped from the
+  ember row silently — no meteor. Meteors are reserved for genuine
+  completions per the bead's "celebratory" framing.
+- `goal_updated` (the bead's "optionally... for overall progress framing")
+  was not wired — `todo_reminder` + `tool_result` already fully cover the
+  bead's render/motion/test requirements, and adding a second progress
+  signal with no corresponding acceptance criterion would be scope creep.
+- Ember rows cap at 12 shown (`MAX_EMBERS_SHOWN`) with a `+N` trailer past
+  that, mirroring Session Bonsai's `MAX_DISPLAYED_LEAVES` pruning pattern —
+  keeps the thin `aboveEditor` strip legible for large todo lists.
+- Meteor launch timestamps and the widget's render clock both read the same
+  injected `FrameScheduler`, not the `AnimationHost`'s internal relative
+  elapsed-ms — same rationale as every prior Wave 2 feature.
+- Like every prior Wave 2 feature, `backpressureFromTui(tui)` is not wired
+  into the `AnimationHost` construction (same structural mount-sequence
+  property: `tui` is only available inside the widget factory callback,
+  after the host already exists — not a regression here).
 
 ## 5. 🫧 Breathing Border (oh-my-pi-t7f)
 
