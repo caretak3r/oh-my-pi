@@ -187,6 +187,14 @@
       "types": "./src/commit/index.ts",
       "import": "./src/commit/index.ts"
     },
+    "./cost-candle": {
+      "types": "./src/cost-candle/index.ts",
+      "import": "./src/cost-candle/index.ts"
+    },
+    "./cost-candle/*": {
+      "types": "./src/cost-candle/*.ts",
+      "import": "./src/cost-candle/*.ts"
+    },
     "./commit/*": {
       "types": "./src/commit/*.ts",
       "import": "./src/commit/*.ts"

@@ -382,9 +382,66 @@ New `./agent-fleet` and `./agent-fleet/*` package.json export paths.
   of the status-line's live subagent-count badge) for `working` fireflies,
   rather than inventing a new color — same concept, same color.
 
+### 7. 🕯️ Cost Candle (oh-my-pi-acf)
+
+**Status:** done.
+
+**Module:** `packages/coding-agent/src/cost-candle/` (`candle.ts`, `state.ts`,
+`widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createCostCandleExtension` pushed as a seventh inline extension
+in `sdk.ts` (`createAgentSession`), subscribed to `message_end`. Reuses the
+existing shared `animations` setting; no new settings-schema entries. New
+`./cost-candle` and `./cost-candle/*` package.json export paths.
+
+**Test command:** `bun test packages/coding-agent/test/cost-candle.test.ts`
+— 24 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- **Grounding held up as specified**, unlike Agent Fleet's re-grounding.
+  `message.usage.cost.total` (`packages/catalog/src/types.ts`'s `Usage.cost`)
+  is already a computed USD dollar amount — populated by `calculateCost`
+  inline in every provider stream implementation (`packages/catalog/src/models.ts`)
+  before a message is finalized — and is live on the extension event bus via
+  `message_end` (`event.message.usage.cost.total` when `message.role ===
+  "assistant"`). This matches the existing status-line `cost` segment
+  (`modes/components/status-line/segments.ts`) and `footer.ts`'s cumulative
+  cost display, both of which already sum `usage.cost.total` the same way.
+- **"Burns down" = wax bar shrinking against a reference ceiling**, mirroring
+  Token Tide's `MAX_REFERENCE_RATE` normalization: `waxRemaining` clamps
+  cumulative session cost against a fixed `$2.00` reference (a "you've spent
+  enough to notice" point, not a real budget) rather than modeling any actual
+  spend limit. A session that keeps accumulating cost past the ceiling just
+  shows a fully-melted (empty) bar rather than going negative or wrapping.
+- **"Gutter" is a widening flicker swing, not a one-shot brightness jump.**
+  A calm baseline flicker (`BASELINE_SWING`) runs at all times so an idle or
+  cheap-message candle "barely flickers" per the bead; each message's cost
+  (via `gutterIntensity`, clamped against a `$0.05` reference) stamps a
+  `gutterEnvelope` that linearly decays back to that baseline over 1.5s,
+  widening the flicker's amplitude (not shifting its resting brightness) —
+  reading as a wilder, more agitated flame right after an expensive turn
+  rather than a flash that just gets brighter then dimmer.
+- **Every assistant `message_end` counts as one "turn"'s cost**, not
+  `turn_end`'s coarser per-turn boundary — matching Token Tide's existing
+  precedent of treating each streamed assistant message as its own
+  throughput/cost unit, since a single logical "turn" can already span
+  multiple assistant messages around tool calls and the codebase's own
+  cost-summing call sites (`footer.ts`, `session-manager.ts`) already do the
+  same per-message accumulation.
+- Same dual-clock-seam pattern as every other Wave 2 feature: the controller
+  stamps `recordMessageCost` against the shared `FrameScheduler`'s relative
+  clock (not `Date.now()`), and the widget reads that same injected clock
+  (not the host's own mount-relative `elapsedMs`) so a widget mounting after
+  the state has already recorded messages doesn't skew the gutter-decay math.
+- Off-tier fallback deliberately doesn't need the flame/wax visuals at all:
+  `"$0.42 total · $0.03/msg avg"`, matching the bead's acceptance text and
+  the "$N/M done"-style static fallback convention every other Wave 2
+  feature already uses for its `off` tier.
+
 ## Ideas not yet started
 
-Ideas 7–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Cost Candle,
-Reflection Ripple, Memory Crystals, Context Constellation, Diff Bloom,
-Cadence Equalizer, Goal Horizon, Model Weather Vane, Prompt Charge) remain
-unstarted.
+Ideas 8–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Reflection Ripple,
+Memory Crystals, Context Constellation, Diff Bloom, Cadence Equalizer, Goal
+Horizon, Model Weather Vane, Prompt Charge) remain unstarted.
