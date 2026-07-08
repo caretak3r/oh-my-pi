@@ -195,6 +195,14 @@
       "types": "./src/cost-candle/*.ts",
       "import": "./src/cost-candle/*.ts"
     },
+    "./reflection-ripple": {
+      "types": "./src/reflection-ripple/index.ts",
+      "import": "./src/reflection-ripple/index.ts"
+    },
+    "./reflection-ripple/*": {
+      "types": "./src/reflection-ripple/*.ts",
+      "import": "./src/reflection-ripple/*.ts"
+    },
     "./commit/*": {
       "types": "./src/commit/*.ts",
       "import": "./src/commit/*.ts"

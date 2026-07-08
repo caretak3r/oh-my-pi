@@ -440,8 +440,70 @@ existing shared `animations` setting; no new settings-schema entries. New
   the "$N/M done"-style static fallback convention every other Wave 2
   feature already uses for its `off` tier.
 
+### 8. 🌊 Reflection Ripple (oh-my-pi-a1u)
+
+**Status:** done.
+
+**Grounding:** verified `ttsr_triggered` (`extensibility/shared-events.ts`) is
+real and fires from `agent-session.ts`'s `#handleTtsrMatches` every time TTSR
+either injects a per-tool rule or aborts/retries the stream to inject one —
+carrying the matched `Rule[]` (each with a `.name`), exactly as the idea doc
+claimed. Unlike Agent Fleet, no re-grounding was needed.
+
+**Module:** `packages/coding-agent/src/reflection-ripple/` (`ripple.ts`,
+`state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createReflectionRippleExtension` pushed as an eighth inline
+extension in `sdk.ts` (`createAgentSession`), subscribed to `ttsr_triggered`.
+Reuses the existing shared `animations` setting; no new settings-schema
+entries. New `./reflection-ripple` and `./reflection-ripple/*` package.json
+export paths.
+
+**Test command:** `bun test packages/coding-agent/test/reflection-ripple.test.ts`
+— 31 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- **A single ripple, not a queue.** A fresh `ttsr_triggered` event while a
+  prior ripple is still expanding restarts the wave from `now` (updating the
+  displayed rule name) instead of layering multiple concurrent ripples —
+  mirroring Breathing Border's `applyAgentStart` restart-even-if-active
+  semantic, since TTSR retriggers in quick succession should read as "still
+  reflecting," not a backlog of waves.
+- **Fully unmounts on settle, unlike Breathing Border's static landing
+  widget.** Breathing Border's border is meant to be persistently visible
+  ambient background even at rest, so it tears down to a static (but still
+  drawn) row. Reflection Ripple's ripple is explicitly transient/event-only
+  per the bead ("taking a breath *before* it reflects"), so once the wave and
+  the breath-dim both finish (`ReflectionRippleState.settleIfDone`, at
+  `max(RIPPLE_DURATION_MS, DIM_DURATION_MS)`), the controller disposes the
+  host **and** calls `ctx.setWidget(key, undefined, ...)` — zero lingering
+  visual, not just zero subscriptions. A later trigger remounts a brand-new
+  host from scratch, same overall dance as Breathing Border's settle
+  callback, just with "back to nothing" instead of "back to static."
+- **Two independent envelopes compose into one brightness value:**
+  `rippleBrightness` (born bright, linearly dissipating as the wave expands
+  — a `sqrt`-eased, decelerating radius so it spreads fast then slows, like a
+  real ripple) is multiplied by `dimMultiplier(reflectDimAmount(...))` (an
+  exhale-shaped dip that lands instantly at trigger and eases back to full
+  brightness) rather than modeling the "breath" as a separate visual layer.
+  This keeps both the wave's own fade and the ambient dim snapshot-testable
+  independently via their own pure functions, matching the reusable-envelope
+  lesson from Breathing Border/Cost Candle.
+- **Off-tier fallback keeps informational value instead of going blank:**
+  `"↺ reflecting: <rule-name(s)>"`, refreshed on every trigger (like Cost
+  Candle/Todo Meteors' off-tier text updates) — deliberately NOT torn down
+  after a timeout the way the animated tiers are, since the `off` tier has no
+  frame clock to drive an expiry; the static line just reflects the most
+  recent trigger until the next one arrives.
+- Same dual-clock-seam pattern as every other Wave 2 feature: the controller
+  stamps `applyTrigger` against the shared `FrameScheduler`'s relative clock
+  (not `Date.now()`), and the widget reads that same injected clock for
+  `rippleElapsedMs` (not the host's own mount-relative `elapsedMs`).
+
 ## Ideas not yet started
 
-Ideas 8–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Reflection Ripple,
-Memory Crystals, Context Constellation, Diff Bloom, Cadence Equalizer, Goal
-Horizon, Model Weather Vane, Prompt Charge) remain unstarted.
+Ideas 9–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Memory Crystals,
+Context Constellation, Diff Bloom, Cadence Equalizer, Goal Horizon, Model
+Weather Vane, Prompt Charge) remain unstarted.
