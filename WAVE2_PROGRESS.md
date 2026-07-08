@@ -969,7 +969,97 @@ package.json export paths, inserted alphabetically between
   established per-feature-owns-its-off-tier-renderer, plain-string
   convention (no ANSI) since the off tier never receives a theme.
 
+## 14. 🧭 Model Weather Vane (oh-my-pi-gqb)
+
+**Status:** done.
+
+**Grounding:** the idea doc says "model switches animate a vane/emblem swap,
+one color per model." Checked piece by piece:
+- **No dedicated model-switch `ExtensionEvent` exists anywhere in this
+  codebase.** A full sweep of `extensibility/shared-events.ts` and
+  `extensibility/extensions/types.ts`'s `ExtensionEvent` union (all 27+
+  members) turns up nothing named `model_change`/`model_switch`. The only
+  persisted "a switch happened" record is `ModelChangeEntry`
+  (`session-entries.ts`, `{ type: "model_change", model, role? }`), appended
+  by `session/agent-session.ts`'s `#setModelWithProviderSessionReset` on
+  every real switch path (`/model`, plan-mode auto-switch, ACP
+  `session/setModel`, RPC, task executor, auth/credential fallback) — but
+  it's a session-log entry consumed only by transcript-rendering UI, never
+  re-emitted as an extension event.
+- **The real, reliable per-call signal instead:** `AssistantMessage.model:
+  string` and `.provider: Provider` (`packages/ai/src/types.ts`) — both
+  required, always-populated fields on every assistant message, set from the
+  model resolved at the top of `streamAssistantResponse`
+  (`packages/agent/src/agent-loop.ts`) before the first streamed chunk. The
+  `message_start` event fires exactly once per assistant response (gated by
+  an `addedPartial` flag in the `"start"` stream-event case), so subscribing
+  to it and diffing `message.model` turn-to-turn against the last-seen value
+  is a precise, once-per-response switch detector — the same "pull/read the
+  real per-call field, don't wait on a push event that doesn't exist"
+  precedent Context Constellation set for `getContextUsage()`, applied here
+  by reading the field directly off the event payload rather than a
+  standalone pull accessor (none exists for model — `ctx.model` /
+  `ctx.models.current()` are session-level snapshots, not per-call).
+- `ProviderResponseMetadata` (the `after_provider_response` event's base
+  type) was checked and ruled out as an alternative: it carries
+  `status`/`headers`/`requestId`/`metadata` only, no model field.
+- Overlap check: none of the thirteen already-shipped Wave 2 features read
+  or display model identity/switching at all (confirmed via a `WAVE2_PROGRESS.md`
+  grep for "model" before this feature) — genuinely unclaimed ground, not a
+  re-skin.
+
+**Module:** `packages/coding-agent/src/model-weather-vane/` (`vane.ts`,
+`state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createModelWeatherVaneExtension` pushed as the fourteenth
+inline extension in `sdk.ts` (`createAgentSession`), subscribed to
+`message_start`. Placed `belowEditor` (evens the split to 7
+aboveEditor / 7 belowEditor). Reuses the existing shared `animations`
+setting; no new settings-schema entries. New `./model-weather-vane` and
+`./model-weather-vane/*` package.json export paths, inserted next to the
+`./memory-crystals/*` cluster.
+
+**Test command:** `bun test packages/coding-agent/test/model-weather-vane.test.ts`
+— 27 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- The "vane/emblem" is a compass glyph (`↑ ↗ → ↘ ↓ ↙ ← ↖`, N through NW) whose
+  direction *and* color are both derived from the same 32-bit FNV-1a hash
+  slot of the model's wire id (`modelDirectionIndex`, `vane.ts`) — "one color
+  per model" from the idea doc, extended to "one direction per model" too,
+  since a vane with a fixed color but rotating pointer reads as more
+  literally a weather vane than a static color swatch. Hand-rolled FNV-1a
+  (not `Bun.hash`) for byte-stable hashing across Bun versions, matching
+  Tool Constellation / Agent Fleet / Context Constellation's precedent.
+- A detected switch triggers a **spin**, not an instant color/glyph swap: the
+  displayed direction sweeps through one full extra loop plus the shortest
+  forward delta from the previous model's slot to the new one
+  (`spinDisplayIndex`), landing exactly on the target at
+  `SPIN_DURATION_MS` (700ms) — always a visibly moving animation, even when
+  two different model ids happen to hash to the same slot (a same-slot
+  "switch" still visibly swings around before settling back). Only the
+  emblem spins; the text label updates to the new model id/provider
+  immediately, matching how Diff Bloom's bloom color reflects the new state
+  immediately while only the *wipe* animates.
+- The very first assistant message this session observes initializes the
+  emblem **silently** (no spin) — only a change detected on a *later*
+  message counts as a genuine switch, the same "no retroactive flare on
+  fresh state" precedent Goal Horizon established for milestone crossings.
+- `full` tier shows glyph + model id + `(provider)`; `subtle` tier drops the
+  provider, matching every prior feature's "collapse to the dominant signal"
+  subtle-tier convention. Off-tier fallback: `"🧭 model-id (provider)"`,
+  falling back to `"no model yet"` before any assistant message — matching
+  the established per-feature-owns-its-off-tier-renderer, plain-string
+  convention (no ANSI).
+- Non-assistant `message_start` events (steering messages, tool-result
+  messages replayed through the same event type) are filtered out via a
+  `role !== "assistant"` narrow before any state mutation, the same
+  `toAssistant*Sample` guard shape Cost Candle uses for `message_end`.
+
 ## Ideas not yet started
 
-Idea 14–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Model Weather
-Vane, Prompt Charge) remain unstarted.
+All fifteen ideas from `IDEA_WIZARD_IDEAS_WAVE2.md` (top 5 + next 10) are now
+implemented. Idea 15 (⚡ Prompt Charge) is the only one remaining before the
+"next 10" list is fully shipped.

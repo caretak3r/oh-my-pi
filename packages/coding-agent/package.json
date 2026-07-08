@@ -495,6 +495,14 @@
       "types": "./src/memory-crystals/*.ts",
       "import": "./src/memory-crystals/*.ts"
     },
+    "./model-weather-vane": {
+      "types": "./src/model-weather-vane/index.ts",
+      "import": "./src/model-weather-vane/index.ts"
+    },
+    "./model-weather-vane/*": {
+      "types": "./src/model-weather-vane/*.ts",
+      "import": "./src/model-weather-vane/*.ts"
+    },
     "./hindsight": {
       "types": "./src/hindsight/index.ts",
       "import": "./src/hindsight/index.ts"
