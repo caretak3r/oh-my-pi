@@ -23,6 +23,7 @@ import {
 	renderGoalHorizonOffText,
 	renderGoalHorizonRow,
 	renderHorizonBar,
+	renderHorizonIndeterminate,
 } from "@oh-my-pi/pi-coding-agent/goal-horizon/widget";
 import type { Goal } from "@oh-my-pi/pi-coding-agent/goals/state";
 
@@ -72,6 +73,23 @@ function makeGoal(overrides: Partial<Goal> = {}): Goal {
 
 function goalUpdated(goal: Goal | null): GoalUpdatedEvent {
 	return { type: "goal_updated", goal };
+}
+
+function recordingContext(overrides: Partial<GoalHorizonContext> = {}): {
+	ctx: GoalHorizonContext;
+	calls: Array<{ key: string; content: unknown }>;
+} {
+	const calls: Array<{ key: string; content: unknown }> = [];
+	const ctx: GoalHorizonContext = {
+		hasUI: true,
+		isTTY: true,
+		env: {},
+		motionSetting: "full",
+		theme: idTheme,
+		setWidget: (key, content) => calls.push({ key, content }),
+		...overrides,
+	};
+	return { ctx, calls };
 }
 
 describe("goal horizon pure math", () => {
@@ -334,23 +352,6 @@ describe("GoalHorizonWidget", () => {
 });
 
 describe("goal horizon controller", () => {
-	function recordingContext(overrides: Partial<GoalHorizonContext> = {}): {
-		ctx: GoalHorizonContext;
-		calls: Array<{ key: string; content: unknown }>;
-	} {
-		const calls: Array<{ key: string; content: unknown }> = [];
-		const ctx: GoalHorizonContext = {
-			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
-			theme: idTheme,
-			setWidget: (key, content) => calls.push({ key, content }),
-			...overrides,
-		};
-		return { ctx, calls };
-	}
-
 	it("mounts an animated widget on the first goal_updated event and mutates state in place afterward", () => {
 		const scheduler = manualScheduler();
 		const controller = new GoalHorizonController({ scheduler });
@@ -428,5 +429,152 @@ describe("goal horizon controller", () => {
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
+	});
+});
+
+describe("goal horizon hardening (adversarial edge cases)", () => {
+	it("flareGlyph(NaN) falls back to the dimmest glyph instead of returning undefined", () => {
+		// Regression test for a real bug: intensity <= 0 / >= 1 are both false for NaN, so
+		// `clamped` stayed NaN, `Math.floor(NaN * len)` is NaN, and FLARE_GLYPHS[NaN] was
+		// undefined with no fallback -- the tenth occurrence of this run's recurring
+		// glyph-ramp-array-lookup-missing-`?? GLYPHS[0]`-fallback bug class.
+		expect(flareGlyph(Number.NaN)).toBe(" ");
+		expect(flareGlyph(Number.POSITIVE_INFINITY)).toBe("☀"); // clamps to the brightest glyph
+		expect(flareGlyph(Number.NEGATIVE_INFINITY)).toBe(" "); // clamps to the dimmest glyph
+	});
+
+	it("renderHorizonIndeterminate never renders literal 'undefined' even with an adversarial NaN clock", () => {
+		// indeterminatePulse(NaN) propagates NaN straight through to flareGlyph, so this path
+		// was directly (unconditionally) reachable through the widget's clock.now() read --
+		// unlike the determinate bar's flareGlyph call, which is gated behind `flareAmplitude > 0`
+		// and so never actually receives the NaN amplitude flareIntensity(NaN-poisoned) produces.
+		const row = renderHorizonIndeterminate(Number.NaN, 500, idTheme);
+		expect(row).not.toContain("undefined");
+		const infRow = renderHorizonIndeterminate(Number.POSITIVE_INFINITY, 500, idTheme);
+		expect(infRow).not.toContain("undefined");
+	});
+
+	it("goalFraction rejects non-finite tokenBudget/tokensUsed, degrading both to the safe 'no progress' value", () => {
+		expect(goalFraction(500, Number.POSITIVE_INFINITY)).toBeUndefined(); // infinite budget treated as "no target"
+		expect(goalFraction(500, Number.NaN)).toBeUndefined();
+		expect(goalFraction(Number.NaN, 1000)).toBe(0); // non-finite usage degrades to "no progress yet", not a crash
+		// A non-finite tokensUsed hits the SAME early-return-0 guard as a non-positive one -- infinite
+		// usage reads as an empty bar, not a full one, the same "any non-finite input maps to the
+		// safe/idle default" policy this run's clamp helpers (clamp01, normalizeAmplitude) all share.
+		expect(goalFraction(Number.POSITIVE_INFINITY, 1000)).toBe(0);
+	});
+
+	it("milestonesCrossed/nearestCrossedMilestone degrade gracefully (never crossed) for a NaN fraction", () => {
+		expect(milestonesCrossed(Number.NaN)).toBe(0);
+		expect(nearestCrossedMilestone(Number.NaN)).toBeUndefined();
+	});
+
+	it("flareIntensity(NaN, ...) and flareIntensity(..., NaN) both propagate NaN rather than throwing", () => {
+		// Documented quirk, not fixed: flareIntensity has no Number.isFinite guard of its own.
+		// It's safe in the real pipeline only because state.ts always stamps peakIntensity as
+		// exactly 1 (never adversarial) and currentFlareAmplitude's `flareAmplitude > 0` gate
+		// (widget.ts) means a NaN result never actually reaches flareGlyph.
+		expect(Number.isNaN(flareIntensity(Number.NaN, 100))).toBe(true);
+		expect(Number.isNaN(flareIntensity(1, Number.NaN))).toBe(true);
+	});
+
+	it("milestoneColumn(NaN, width) and filledColumnCount(NaN, width) degrade to a safely-ignored NaN rather than throwing", () => {
+		// Both propagate NaN with no guard, but every downstream comparison (`i === flareColumn`,
+		// `i < filled`) is false for NaN on either side, so the bar just renders as fully empty /
+		// without a flare cell instead of crashing or printing "undefined" -- consistent with this
+		// run's "NaN comparison degrades gracefully" pattern (vs. array-lookup, which needs a fix).
+		expect(Number.isNaN(milestoneColumn(Number.NaN, HORIZON_BAR_WIDTH))).toBe(true);
+		expect(Number.isNaN(filledColumnCount(Number.NaN, HORIZON_BAR_WIDTH))).toBe(true);
+	});
+
+	it("renderHorizonBar never renders literal 'undefined' when fed a directly-adversarial NaN elapsedMs or fraction", () => {
+		const state = new GoalHorizonState();
+		state.applyGoal(makeGoal({ tokensUsed: 300, tokenBudget: 1000 }), 0);
+		state.applyGoal(makeGoal({ tokensUsed: 600, tokenBudget: 1000 }), 100); // crosses a milestone, sets lastFlareAt
+		const snapshot = state.snapshot();
+
+		const nanClockRow = renderHorizonBar(snapshot.fraction as number, Number.NaN, snapshot, idTheme);
+		expect(nanClockRow).not.toContain("undefined");
+		expect([...nanClockRow]).toHaveLength(HORIZON_BAR_WIDTH);
+
+		const nanFractionRow = renderHorizonBar(Number.NaN, 100000, snapshot, idTheme);
+		expect(nanFractionRow).not.toContain("undefined");
+		expect([...nanFractionRow]).toHaveLength(HORIZON_BAR_WIDTH);
+	});
+
+	it("GoalHorizonState.applyGoal with a NaN-poisoned clock reading never throws and never corrupts later renders", () => {
+		// Same "unvalidated clock reading at record time" gap as Cost Candle's recordMessageCost,
+		// Memory Crystals' applyCompactionEnd, and Diff Bloom's applyBloom -- applyGoal stamps `now`
+		// straight into lastFlareAt with no Number.isFinite guard. Here the consequence is benign:
+		// currentFlareAmplitude's NaN result never reaches flareGlyph because of the `> 0` gate.
+		const state = new GoalHorizonState();
+		state.applyGoal(makeGoal({ tokensUsed: 0, tokenBudget: 1000 }), 0);
+		state.applyGoal(makeGoal({ tokensUsed: 300, tokenBudget: 1000 }), Number.NaN); // crosses 0.25 at a NaN clock
+		const snapshot = state.snapshot();
+		expect(Number.isNaN(snapshot.lastFlareAt as number)).toBe(true);
+
+		expect(() => renderHorizonBar(snapshot.fraction as number, 100000, snapshot, idTheme)).not.toThrow();
+		const row = renderHorizonBar(snapshot.fraction as number, 100000, snapshot, idTheme);
+		expect(row).not.toContain("undefined");
+	});
+
+	it("GoalStatus overrides recolor every filled cell to a single flat color regardless of position", () => {
+		const state = new GoalHorizonState();
+		state.applyGoal(makeGoal({ status: "complete", tokensUsed: 900, tokenBudget: 1000 }), 0);
+		const row = renderHorizonBar(state.snapshot().fraction as number, 100000, state.snapshot(), taggedTheme);
+		expect(row).not.toContain("warning:"); // zenith-bucket color is suppressed by the status override
+		expect(row).not.toContain("syntaxType:");
+		const filledTags = [...row.matchAll(/success:█/g)];
+		expect(filledTags.length).toBe(18); // 0.9 * 20 filled cells, all flat "success"
+	});
+
+	it("empty objective and zero-width goal id are rendered without throwing", () => {
+		const state = new GoalHorizonState();
+		state.applyGoal(makeGoal({ id: "", objective: "", tokensUsed: 0, tokenBudget: 1000 }), 0);
+		expect(() => renderGoalHorizonRow(state.snapshot(), 0, idTheme, "full")).not.toThrow();
+		expect(() => renderGoalHorizonOffText(state.snapshot())).not.toThrow();
+	});
+
+	it("dispose before any mount is a safe no-op", () => {
+		const controller = new GoalHorizonController();
+		const { ctx, calls } = recordingContext();
+		expect(() => controller.dispose(ctx)).not.toThrow();
+		expect(calls).toHaveLength(0);
+	});
+
+	it("dispose is idempotent when called twice after a real mount", () => {
+		const scheduler = manualScheduler();
+		const controller = new GoalHorizonController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onGoalUpdated(goalUpdated(makeGoal()), ctx);
+		const factory = calls[0].content as (tui: typeof noopTui, theme: GoalHorizonTheme) => GoalHorizonWidget;
+		factory(noopTui, idTheme);
+
+		controller.dispose(ctx);
+		expect(() => controller.dispose(ctx)).not.toThrow();
+		expect(calls.filter(c => c.content === undefined)).toHaveLength(1); // the widget clear only fires once
+	});
+
+	it("a goal_updated event after dispose() remounts the widget rather than staying dormant", () => {
+		const controller = new GoalHorizonController();
+		const { ctx, calls } = recordingContext();
+
+		controller.onGoalUpdated(goalUpdated(makeGoal()), ctx);
+		controller.dispose(ctx);
+		expect(calls[calls.length - 1].content).toBeUndefined();
+
+		controller.onGoalUpdated(goalUpdated(makeGoal({ tokensUsed: 42 })), ctx);
+		expect(calls[calls.length - 1].content).not.toBeUndefined();
+		expect(controller.state.snapshot().tokensUsed).toBe(42);
+	});
+
+	it("an extreme tokenBudget of 1 with tokensUsed far over budget still renders a valid, fully-filled bar", () => {
+		const state = new GoalHorizonState();
+		state.applyGoal(makeGoal({ tokensUsed: 999999, tokenBudget: 1 }), 0);
+		const snapshot = state.snapshot();
+		expect(snapshot.fraction).toBe(1);
+		const row = renderHorizonBar(snapshot.fraction as number, 100000, snapshot, idTheme);
+		expect([...row].filter(ch => ch === "█")).toHaveLength(HORIZON_BAR_WIDTH);
 	});
 });

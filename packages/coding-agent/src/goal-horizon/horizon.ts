@@ -90,7 +90,7 @@ const FLARE_GLYPHS = [" ", "·", "✦", "✷", "☀"] as const;
 export function flareGlyph(intensity: number): string {
 	const clamped = intensity <= 0 ? 0 : intensity >= 1 ? 1 : intensity;
 	const index = Math.min(FLARE_GLYPHS.length - 1, Math.floor(clamped * FLARE_GLYPHS.length));
-	return FLARE_GLYPHS[index];
+	return FLARE_GLYPHS[index] ?? FLARE_GLYPHS[0];
 }
 
 /** Filled-cell count for a `width`-column bar at `fraction`. Pure, monotonic non-decreasing in `fraction`. */

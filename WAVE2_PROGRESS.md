@@ -1190,7 +1190,7 @@ the pass is resumable across iterations.
 | 10 | Context Constellation | ✅ done | oh-my-pi-cag |
 | 11 | Diff Bloom | ✅ done | oh-my-pi-9gm |
 | 12 | Cadence Equalizer | ✅ done | oh-my-pi-9md |
-| 13 | Goal Horizon | ⬜ pending | — |
+| 13 | Goal Horizon | ✅ done | oh-my-pi-xk9 |
 | 14 | Model Weather Vane | ⬜ pending | — |
 | 15 | Prompt Charge | ⬜ pending | — |
 
@@ -2009,3 +2009,76 @@ pass since Agent Fleet.
 `bun test packages/coding-agent/test/cadence-equalizer.test.ts`: 49 pass,
 0 fail. Root `bun run check` green across all workspaces after the fix.
 Bead: oh-my-pi-9md.
+
+### 13. Goal Horizon — hardening notes
+
+Added 15 edge-case behavioral tests to
+`packages/coding-agent/test/goal-horizon.test.ts` (44 total, up from 30),
+covering `horizon.ts`'s pure math under adversarial `NaN`/`Infinity`
+inputs, `GoalHorizonState`'s NaN-poisoned-clock-at-flare-time edge case,
+directly-adversarial `renderHorizonBar`/`renderHorizonIndeterminate` calls,
+a `GoalStatus` flat-color-override rendering check, and controller
+dispose/remount idempotency. Also hoisted the `recordingContext()` test
+helper from inside the `"goal horizon controller"` describe block to
+module scope, matching the pattern established since Agent Fleet.
+
+- **Real bug found and fixed: the TENTH occurrence of the recurring
+  glyph-ramp array-lookup-missing-`?? GLYPHS[0]`-fallback bug class**,
+  already fixed across features #3–11 (Session Bonsai, Todo Meteors,
+  Breathing Border, Agent Fleet, Cost Candle, Reflection Ripple, Memory
+  Crystals, Diff Bloom). `flareGlyph`'s own clamp (`intensity <= 0 ? 0 :
+  intensity >= 1 ? 1 : intensity`) leaves `NaN` unclamped (neither
+  comparison is true for `NaN`), so `Math.floor(NaN * FLARE_GLYPHS.length)`
+  is `NaN` and `FLARE_GLYPHS[NaN]` was `undefined` with no fallback. Fixed
+  with the same `?? FLARE_GLYPHS[0]` pattern. **Directly, unconditionally
+  reachable** through `renderHorizonIndeterminate` (the unbounded-goal, no-
+  `tokenBudget` render path): `flareGlyph(indeterminatePulse(elapsedMs))`
+  is called with no gate at all, so an adversarial `NaN` widget clock
+  reading (`this.#clock.now()`) propagates straight through
+  `indeterminatePulse(NaN)` → `NaN` → `flareGlyph(NaN)` → literal
+  `"undefined"` text in the rendered row — a real, exploitable path, not
+  merely latent. By contrast, `renderHorizonBar`'s own `flareGlyph` call
+  (the milestone-flare overlay) is gated behind `flareAmplitude > 0`, and a
+  `NaN`-poisoned `flareAmplitude` (from a `NaN`-poisoned `lastFlareAt` via
+  `applyGoal`'s unvalidated clock parameter) fails that comparison and
+  never actually reaches the buggy call — the same "coincidental gate
+  protects the buggy call in one path but not another" shape Diff Bloom's
+  hardening pass first identified between its full-tier fill loop and
+  subtle-tier direct-concat paths.
+- **`GoalHorizonState.applyGoal` shares the same unvalidated-clock-at-
+  record-time gap as Cost Candle/Memory Crystals/Diff Bloom** (no
+  `Number.isFinite` guard on the `now` parameter before stamping it into
+  `lastFlareAt`), but here the consequence is fully benign: because
+  `currentFlareAmplitude`'s gate (`flareAmplitude > 0`) is itself a
+  comparison against `NaN` (always `false`), a `NaN`-poisoned
+  `lastFlareAt` just makes the milestone flare silently never render again
+  for that goal rather than corrupting the bar or hanging — confirmed by
+  test that a NaN-clock flare still produces a valid, `"undefined"`-free
+  bar render.
+- **`goalFraction` maps a non-finite `tokensUsed` (including
+  `+Infinity`) to `0`, not `1`** — it hits the *same* early-return guard
+  (`!Number.isFinite(tokensUsed) || tokensUsed <= 0`) as a non-positive
+  value, so "infinite usage" reads as an *empty* bar rather than a *full*
+  one. Counterintuitive at first glance but consistent with this run's
+  established "any non-finite input maps to the safe/idle default" clamp
+  policy (Cadence Equalizer's `clamp01`, Token Tide's `normalizeAmplitude`)
+  — locked in with a test rather than changed, since no real call site can
+  produce a non-finite `tokensUsed` (`Goal.tokensUsed` is always a
+  runtime-accumulated finite counter).
+- **`milestoneColumn(NaN, width)` and `filledColumnCount(NaN, width)`**
+  both propagate `NaN` with no guard of their own, but every downstream
+  comparison that consumes them (`i === flareColumn`, `i < filled`) is
+  `false` for `NaN` on either side — the bar degrades to fully empty /
+  without a flare cell rather than crashing or printing `"undefined"`,
+  the same "NaN-comparison degrades gracefully, no fix needed" pattern
+  established since Todo Meteors' `isPrunable`.
+- **`GoalStatus` overrides (`complete`/`dropped`/`paused`) were
+  previously undertested**: confirmed by test that a `complete` goal's
+  bar recolors every filled cell to a single flat `success` tag with zero
+  `warning`/`syntaxType`/etc. position-based tags leaking through, matching
+  the documented "status color wins outright, not blended with position"
+  design decision.
+
+`bun test packages/coding-agent/test/goal-horizon.test.ts`: 44 pass,
+0 fail. Root `bun check` green across all workspaces after the fix.
+Bead: oh-my-pi-xk9.
