@@ -50,6 +50,26 @@ function manualScheduler(): FrameScheduler & { advance(ms: number): void; readon
 
 const fullEnv = { hasUI: true, isTTY: true, env: {} as Record<string, string | undefined> };
 
+/** Records every `setWidget` call for assertion, with sensible full-motion defaults. */
+function recordingContext(overrides: Partial<DiffBloomContext> = {}): {
+	ctx: DiffBloomContext;
+	calls: Array<{ key: string; content: unknown }>;
+} {
+	const calls: Array<{ key: string; content: unknown }> = [];
+	const ctx: DiffBloomContext = {
+		hasUI: true,
+		isTTY: true,
+		env: {},
+		motionSetting: "full",
+		theme: idTheme,
+		setWidget: (key, content) => calls.push({ key, content }),
+		...overrides,
+	};
+	return { ctx, calls };
+}
+
+const sampleDiff = ["+1|line one", "+2|line two", "-1|old line"].join("\n");
+
 class ToggleTui {
 	renderUnderPressure = false;
 	requestComponentRender(): void {}
@@ -358,25 +378,6 @@ describe("DiffBloomWidget", () => {
 });
 
 describe("diff bloom controller", () => {
-	function recordingContext(overrides: Partial<DiffBloomContext> = {}): {
-		ctx: DiffBloomContext;
-		calls: Array<{ key: string; content: unknown }>;
-	} {
-		const calls: Array<{ key: string; content: unknown }> = [];
-		const ctx: DiffBloomContext = {
-			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
-			theme: idTheme,
-			setWidget: (key, content) => calls.push({ key, content }),
-			...overrides,
-		};
-		return { ctx, calls };
-	}
-
-	const sampleDiff = ["+1|line one", "+2|line two", "-1|old line"].join("\n");
-
 	it("mounts an animated widget on the first edit tool_result with a real, non-empty diff", () => {
 		const scheduler = manualScheduler();
 		const controller = new DiffBloomController({ scheduler });
@@ -537,5 +538,160 @@ describe("diff bloom controller", () => {
 		);
 		expect(calls).toHaveLength(1);
 		expect(controller.state.snapshot().path).toBe("multi/a.ts");
+	});
+});
+
+describe("diff bloom hardening: adversarial pure math", () => {
+	it("bloomProgress treats non-finite elapsedMs/durationMs consistently with the non-positive-duration guard", () => {
+		expect(bloomProgress(NaN, BLOOM_DURATION_MS)).toBeNaN();
+		expect(bloomProgress(500, NaN)).toBeNaN();
+		expect(bloomProgress(500, 0)).toBe(1);
+		expect(bloomProgress(500, -100)).toBe(1);
+	});
+
+	it("bloomIntensity(NaN) propagates NaN rather than crashing", () => {
+		expect(bloomIntensity(NaN)).toBeNaN();
+	});
+
+	it("bloomIntensity(Infinity) settles to 0, matching the 'past the wipe' end state", () => {
+		expect(bloomIntensity(Infinity)).toBe(0);
+	});
+
+	it("lineFraction(NaN) propagates NaN; lineFraction(Infinity) clamps to 1 like any large count", () => {
+		expect(lineFraction(NaN)).toBeNaN();
+		expect(lineFraction(Infinity)).toBe(1);
+		expect(lineFraction(-Infinity)).toBe(0);
+	});
+
+	it("bloomGlyph(NaN) falls back to the dimmest glyph instead of returning undefined (the recurring glyph-ramp bug)", () => {
+		expect(bloomGlyph(NaN)).toBe(" ");
+		expect(bloomGlyph(Infinity)).toBe("█");
+		expect(bloomGlyph(-Infinity)).toBe(" ");
+	});
+
+	it("filledCellCount(NaN inputs) propagates NaN rather than throwing", () => {
+		expect(filledCellCount(NaN, 10, 1)).toBeNaN();
+		expect(filledCellCount(20, 10, NaN)).toBeNaN();
+		expect(filledCellCount(20, NaN, 1)).toBeNaN();
+		expect(filledCellCount(-5, 10, 1)).toBe(0);
+	});
+});
+
+describe("diff bloom hardening: rendering never leaks literal 'undefined'", () => {
+	it("a NaN elapsedMs never renders the literal string 'undefined' in full tier", () => {
+		const row = renderDiffBloomRow(NaN, 20, taggedTheme, 10, 3, "full");
+		expect(row.includes("undefined")).toBe(false);
+	});
+
+	it("a NaN elapsedMs never renders the literal string 'undefined' in subtle tier at width > 1", () => {
+		const row = renderDiffBloomRow(NaN, 11, taggedTheme, 10, 3, "subtle");
+		expect(row.includes("undefined")).toBe(false);
+	});
+
+	it("an Infinity elapsedMs renders the plain idle row (past the wipe, same as any large finite elapsed)", () => {
+		const row = renderDiffBloomRow(Infinity, 20, taggedTheme, 10, 3, "full");
+		expect(row).toBe(renderDiffBloomIdleRow(20, taggedTheme));
+	});
+
+	it("negative width is treated the same as zero width: an empty row", () => {
+		expect(renderDiffBloomRow(500, -5, taggedTheme, 5, 5, "full")).toBe("");
+		expect(renderDiffBloomIdleRow(-5, idTheme)).toBe("");
+	});
+
+	it("negative added/removed counts render as an empty (unfilled) diff without crashing", () => {
+		const row = renderDiffBloomRow(BLOOM_GROW_MS, 20, taggedTheme, -5, -5, "full");
+		expect(row.includes("toolDiffAdded:")).toBe(false);
+		expect(row.includes("toolDiffRemoved:")).toBe(false);
+	});
+});
+
+describe("diff bloom hardening: DiffBloomState clock-skew and NaN-poisoning", () => {
+	it("bloomElapsedMs clamps backward clock skew (now before bloomedAt) to 0 rather than going negative", () => {
+		const state = new DiffBloomState();
+		state.applyBloom("a.ts", 1, 0, 1000);
+		expect(state.bloomElapsedMs(500)).toBe(0);
+	});
+
+	it("a NaN trigger timestamp poisons bloomElapsedMs permanently, and settleIfDone's '<' guard reads that as already-past-threshold: the bloom settles on the very next check instead of hanging forever", () => {
+		const state = new DiffBloomState();
+		state.applyBloom("a.ts", 1, 0, NaN);
+		expect(state.phase).toBe("blooming");
+		expect(state.bloomElapsedMs(0)).toBeNaN();
+
+		// NaN < SETTLE_MS is false, so the "still pending" branch is skipped and
+		// the state falls straight through to the idle transition — the same
+		// "'<' used as a stay-pending gate is backwards for NaN" shape Reflection
+		// Ripple's hardening pass first documented for settleIfDone.
+		expect(state.settleIfDone(0)).toBe(true);
+		expect(state.phase).toBe("idle");
+	});
+
+	it("a NaN `now` passed directly to settleIfDone (bloomedAt itself finite) has the same immediate-settle effect", () => {
+		const state = new DiffBloomState();
+		state.applyBloom("a.ts", 1, 0, 0);
+		expect(state.settleIfDone(NaN)).toBe(true);
+		expect(state.phase).toBe("idle");
+	});
+
+	it("applyBloom with a negative line count is stored as-is (no clamping at the state layer)", () => {
+		const state = new DiffBloomState();
+		state.applyBloom("a.ts", -3, -7, 0);
+		expect(state.snapshot()).toEqual({ phase: "blooming", path: "a.ts", added: -3, removed: -7, bloomCount: 1 });
+	});
+});
+
+describe("diff bloom hardening: controller dispose/remount idempotency", () => {
+	it("dispose() with no prior mount is a safe no-op", () => {
+		const controller = new DiffBloomController();
+		const { ctx, calls } = recordingContext();
+		expect(() => controller.dispose(ctx)).not.toThrow();
+		expect(calls).toHaveLength(0);
+	});
+
+	it("calling dispose() twice in a row only tears the widget down once", () => {
+		const scheduler = manualScheduler();
+		const controller = new DiffBloomController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onToolResult(editResult(sampleDiff), ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(callsAfterFirstDispose); // no extra setWidget(undefined) call
+	});
+
+	it("a stale settle callback firing after the controller was already explicitly disposed is a safe no-op (guarded by the host-identity check)", () => {
+		const scheduler = manualScheduler();
+		const controller = new DiffBloomController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onToolResult(editResult(sampleDiff), ctx);
+		const factory = calls[0].content as (tui: ToggleTui, theme: DiffBloomTheme) => DiffBloomWidget;
+		const widget = factory(new ToggleTui(), idTheme);
+		widget.render(20);
+		scheduler.advance(BLOOM_DURATION_MS - 1);
+
+		controller.dispose(ctx);
+		const callsAfterDispose = calls.length;
+
+		// The orphaned widget instance still exists and its onFrame still runs
+		// (nothing unsubscribed it directly) — it must not resurrect the widget
+		// or double-dispose the already-torn-down host.
+		expect(() => widget.onFrame(BLOOM_DURATION_MS)).not.toThrow();
+		expect(calls).toHaveLength(callsAfterDispose);
+	});
+
+	it("a new edit after an explicit dispose() remounts fresh rather than staying dormant", () => {
+		const scheduler = manualScheduler();
+		const controller = new DiffBloomController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onToolResult(editResult(sampleDiff, { path: "a.ts" }), ctx);
+		controller.dispose(ctx);
+		expect(calls[calls.length - 1].content).toBeUndefined();
+
+		controller.onToolResult(editResult(sampleDiff, { path: "b.ts" }), ctx);
+		expect(typeof calls[calls.length - 1].content).toBe("function"); // remounted, not left dormant
+		expect(controller.state.snapshot().bloomCount).toBe(2); // state survived dispose — only the mount tore down
 	});
 });

@@ -1188,7 +1188,7 @@ the pass is resumable across iterations.
 | 8 | Reflection Ripple | ✅ done | oh-my-pi-cdc |
 | 9 | Memory Crystals | ✅ done | oh-my-pi-91d |
 | 10 | Context Constellation | ✅ done | oh-my-pi-cag |
-| 11 | Diff Bloom | ⬜ pending | — |
+| 11 | Diff Bloom | ✅ done | oh-my-pi-9gm |
 | 12 | Cadence Equalizer | ⬜ pending | — |
 | 13 | Goal Horizon | ⬜ pending | — |
 | 14 | Model Weather Vane | ⬜ pending | — |
@@ -1847,3 +1847,78 @@ out-of-bounds rendering, and controller dispose/remount idempotency:
 `bun test packages/coding-agent/test/context-constellation.test.ts`: 41
 pass, 0 fail. Root `bun run check` green across all workspaces after the
 fix. Bead: oh-my-pi-cag.
+
+### 11. Diff Bloom — hardening notes
+
+Added 15 edge-case behavioral tests to
+`packages/coding-agent/test/diff-bloom.test.ts` (54 total, up from 39),
+covering `bloom.ts`'s pure math under adversarial `NaN`/`Infinity`/negative
+inputs, `renderDiffBloomRow`'s literal-`"undefined"` leak surface,
+`DiffBloomState` clock-skew/NaN-poisoning, and controller dispose/remount
+idempotency. Also hoisted the `recordingContext()`/`sampleDiff` test
+helpers from inside the `"diff bloom controller"` describe block to module
+scope so the new hardening block could reuse them, matching the pattern
+established in the Agent Fleet/Cost Candle/Memory Crystals hardening
+passes.
+
+- **Real bug found and fixed — the ninth occurrence of the recurring
+  glyph-ramp bug**: `bloomGlyph(NaN)` returned `undefined`
+  (`BLOOM_GLYPHS[NaN]` has no bounds-safe fallback) — the same class of
+  bug already fixed in Session Bonsai, Todo Meteors, Breathing Border,
+  Agent Fleet, Cost Candle, Reflection Ripple, Memory Crystals, and (in
+  spirit) Context Constellation's `sweepProgress`. Fixed with the same
+  `?? BLOOM_GLYPHS[0]` fallback pattern in
+  `packages/coding-agent/src/diff-bloom/bloom.ts`. Unlike most prior
+  occurrences (which only ever surfaced through the `full`-tier per-cell
+  fill loop, where a `NaN` fill count coincidentally makes `filled`
+  false for every cell and the undefined glyph is never actually
+  concatenated into the row), this one is directly reachable through the
+  `subtle` tier at any width > 1: `renderDiffBloomRow`'s subtle branch
+  always concatenates the single center glyph into the row regardless of
+  intensity, so a `NaN` `elapsedMs` (e.g. from a poisoned trigger
+  timestamp) would have rendered the literal string `"undefined"` into
+  the middle of the row — a real, user-visible corruption path, not just
+  a latent one.
+- **`DiffBloomState.applyBloom` does not validate its `now` clock-reading
+  parameter before stamping it into `#bloomedAt`** — the same
+  unvalidated-clock-at-trigger-time shape as Cost Candle's
+  `recordMessageCost` and Memory Crystals' `applyCompactionEnd`. A `NaN`
+  trigger timestamp permanently poisons `bloomElapsedMs` to `NaN`
+  regardless of any later `now`. Because `settleIfDone`'s stay-pending
+  guard is written as `elapsed < SETTLE_MS ? return false`, and
+  `NaN < SETTLE_MS` is always `false`, the `NaN`-poisoned bloom does
+  **not** hang forever — it falls straight through to the `idle`
+  transition on the very next `settleIfDone` check, settling instantly
+  instead of playing out its grow-and-wipe animation. This is the exact
+  same `"'<' used as a stay-pending gate is backwards for NaN"` shape
+  Reflection Ripple's hardening pass first documented for its own
+  `settleIfDone`; confirmed by test rather than "fixed" since there is no
+  well-defined correct behavior for a caller that hands the state machine
+  a broken clock reading in the first place.
+- **`bloomIntensity(Infinity)` correctly settles to `0`** (the "past the
+  wipe" end state) rather than exhibiting the backwards-Infinity quirk
+  found in some other features' normalization math — `bloomProgress`'s
+  own `elapsedMs >= durationMs` branch already catches `Infinity` before
+  it reaches the grow/wipe split, so no fix was needed here; confirmed by
+  test.
+- **`lineFraction`/`filledCellCount` under `NaN`/`Infinity`/negative
+  inputs** all degrade to either graceful clamping (`Infinity` lines ->
+  `1`, negative lines -> `0`) or `NaN` propagation without throwing —
+  confirmed by test, consistent with the run's established "comparison
+  logic degrades gracefully, array-lookup logic needs the explicit `??`
+  fix" distinction.
+- **Controller dispose/remount idempotency**: `dispose()` with no prior
+  mount is a safe no-op; a second `dispose()` call after a mount does not
+  re-clear the widget; a stale `onSettled` callback firing from an
+  orphaned widget instance *after* the controller was already explicitly
+  disposed is a safe no-op (guarded by `#teardownToNothing`'s
+  host-identity check, the same guard shape verified in every prior
+  controller's hardening pass); and a new edit arriving after an explicit
+  `dispose()` remounts a fresh animated widget with state (the running
+  `bloomCount`) intact.
+
+`bun test packages/coding-agent/test/diff-bloom.test.ts`: 54 pass, 0 fail.
+Root `bun check` green across all workspaces after the fix (pre-existing,
+unrelated failures in `bun test`'s full-suite run — Python runner shell
+streaming, SSH approval gating, etc. — were confirmed present before this
+change and untouched by it). Bead: oh-my-pi-9gm.

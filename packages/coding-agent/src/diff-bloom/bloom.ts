@@ -55,7 +55,7 @@ const BLOOM_GLYPHS = [" ", "·", "▪", "▫", "█"] as const;
 export function bloomGlyph(intensity: number): string {
 	const clamped = intensity <= 0 ? 0 : intensity >= 1 ? 1 : intensity;
 	const index = Math.min(BLOOM_GLYPHS.length - 1, Math.floor(clamped * BLOOM_GLYPHS.length));
-	return BLOOM_GLYPHS[index];
+	return BLOOM_GLYPHS[index] ?? BLOOM_GLYPHS[0];
 }
 
 /** How many of `segmentWidth` cells should render filled for `lines` at the given bloom `intensity`. Pure. */
