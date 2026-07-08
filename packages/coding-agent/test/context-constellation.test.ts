@@ -27,6 +27,7 @@ import {
 	displayedFilledCells,
 	renderConstellationGrid,
 	renderConstellationOffText,
+	renderConstellationRow,
 } from "@oh-my-pi/pi-coding-agent/context-constellation/widget";
 
 // Identity theme so assertions see plain text instead of ANSI escapes.
@@ -126,6 +127,38 @@ describe("context constellation math (pure)", () => {
 		expect(growFlareIntensity(GROW_FLARE_MS * 10)).toBe(0);
 		expect(growFlareIntensity(-50)).toBe(1);
 	});
+
+	it("cellsForPercent treats non-finite/negative cells arguments without throwing", () => {
+		expect(cellsForPercent(Number.NaN)).toBe(0);
+		expect(cellsForPercent(Number.POSITIVE_INFINITY)).toBe(0);
+		expect(cellsForPercent(Number.NEGATIVE_INFINITY)).toBe(0);
+		expect(cellsForPercent(50, 0)).toBe(0);
+	});
+
+	it("sweepProgress treats a non-finite elapsedMs as already-complete rather than propagating NaN", () => {
+		// Without this guard, easeOutCubic(NaN / duration) yields NaN, which would flow into
+		// lerpCells and render the entire grid permanently "stuck mid-sweep" (see the widget
+		// lifecycle test below) instead of snapping to the sweep's real target.
+		expect(sweepProgress(Number.NaN)).toBe(1);
+		expect(sweepProgress(Number.POSITIVE_INFINITY)).toBe(1);
+		expect(sweepProgress(Number.NEGATIVE_INFINITY)).toBe(1);
+		expect(Number.isNaN(sweepProgress(Number.NaN))).toBe(false);
+	});
+
+	it("sweepProgress with a non-finite durationMs falls back to complete, same as durationMs <= 0", () => {
+		expect(sweepProgress(100, Number.NaN)).toBe(1);
+		expect(sweepProgress(100, -1)).toBe(1);
+		expect(sweepProgress(100, 0)).toBe(1);
+	});
+
+	it("lerpCells propagates a NaN progress as NaN (documented quirk, unreachable via sweepProgress after its NaN guard)", () => {
+		expect(Number.isNaN(lerpCells(20, 4, Number.NaN))).toBe(true);
+	});
+
+	it("invertFillOrder round-trips the empty permutation", () => {
+		expect(invertFillOrder([])).toEqual([]);
+		expect(buildFillOrder(0)).toEqual([]);
+	});
 });
 
 describe("context constellation state", () => {
@@ -179,6 +212,29 @@ describe("context constellation state", () => {
 		const snap = state.snapshot();
 		expect(snap.contextWindow).toBe(0);
 		expect(snap.tokens).toBe(0);
+	});
+
+	it("a NaN-poisoned sweep startedAt no longer corrupts every future frame, thanks to sweepProgress's non-finite guard", () => {
+		const state = new ConstellationState();
+		state.applyContextUsage(usage(80), 0);
+		const before = state.snapshot().filledCells;
+		state.beginSweep(Number.NaN); // simulates an injected bad clock reading at auto_compaction_start
+		state.applyContextUsage(usage(20), 10);
+		const after = state.snapshot().filledCells;
+
+		expect(displayedFilledCells(state.snapshot(), 50)).toBe(after);
+		expect(displayedFilledCells(state.snapshot(), 50)).not.toBe(before);
+		expect(Number.isNaN(displayedFilledCells(state.snapshot(), 50))).toBe(false);
+	});
+
+	it("never regresses lastGrowAt on a NaN percent reading (clampPercent floors it to 0, which never counts as growth)", () => {
+		const state = new ConstellationState();
+		state.applyContextUsage(usage(50), 100);
+		expect(state.snapshot().lastGrowAt).toBe(100);
+		state.applyContextUsage({ percent: Number.NaN, contextWindow: 100_000, tokens: 0 }, 200);
+		const snap = state.snapshot();
+		expect(snap.filledCells).toBe(0);
+		expect(snap.lastGrowAt).toBe(100); // 0 cells is not > previous filledCells, so no regrow stamp
 	});
 });
 
@@ -255,6 +311,29 @@ describe("context constellation rendering (byte-stable)", () => {
 		expect(renderConstellationOffText(state.snapshot())).toBe("✦ context empty");
 		state.applyContextUsage(usage(42, 128_000), 0);
 		expect(renderConstellationOffText(state.snapshot())).toBe("✦ 42.0%/128K");
+	});
+
+	it("renderConstellationRow falls back to rank 0 for a cell index past RANK_OF_CELL's bounds, never emitting undefined", () => {
+		const state = new ConstellationState();
+		state.applyContextUsage(usage(0), 0);
+		const row = renderConstellationRow(state.snapshot(), 0, idTheme, "subtle", GRID_CELLS * 10, 3);
+		expect(row).not.toContain("undefined");
+		expect([...row].every(ch => ch === "✦" || ch === "·" || ch === " ")).toBe(true);
+	});
+
+	it("renderConstellationRow with rowCells=0 renders an empty row without throwing", () => {
+		const state = new ConstellationState();
+		state.applyContextUsage(usage(50), 0);
+		expect(renderConstellationRow(state.snapshot(), 0, idTheme, "full", 0, 0)).toBe("");
+	});
+
+	it("100% usage lights every cell and never leaves a dangling comet/flare once fully settled", () => {
+		const state = new ConstellationState();
+		state.applyContextUsage(usage(100), 0);
+		const grid = renderConstellationGrid(state.snapshot(), GROW_FLARE_MS * 5, idTheme, "full").join(" ");
+		expect([...grid].filter(ch => ch === "✦").length).toBe(GRID_CELLS);
+		expect(grid).not.toContain(COMET_GLYPH);
+		expect(grid).not.toContain("✹");
 	});
 });
 
@@ -425,5 +504,37 @@ describe("context constellation controller", () => {
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
+	});
+
+	it("dispose before any mount is a safe no-op", () => {
+		const controller = new ContextConstellationController();
+		const { ctx, calls } = recordingContext();
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("dispose is idempotent: a second call does not re-clear the widget", () => {
+		const scheduler = manualScheduler();
+		const controller = new ContextConstellationController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onContext(ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(callsAfterFirstDispose);
+	});
+
+	it("remounts cleanly after dispose when a later event arrives", () => {
+		const scheduler = manualScheduler();
+		const controller = new ContextConstellationController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onContext(ctx);
+		controller.dispose(ctx);
+		controller.onContext({ ...ctx, getContextUsage: () => usage(70) });
+
+		expect(typeof calls[calls.length - 1].content).toBe("function");
+		expect(controller.state.snapshot().percent).toBe(70);
 	});
 });

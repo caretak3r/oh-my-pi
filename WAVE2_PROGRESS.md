@@ -1187,7 +1187,7 @@ the pass is resumable across iterations.
 | 7 | Cost Candle | ✅ done | oh-my-pi-0a2 |
 | 8 | Reflection Ripple | ✅ done | oh-my-pi-cdc |
 | 9 | Memory Crystals | ✅ done | oh-my-pi-91d |
-| 10 | Context Constellation | ⬜ pending | — |
+| 10 | Context Constellation | ✅ done | oh-my-pi-cag |
 | 11 | Diff Bloom | ⬜ pending | — |
 | 12 | Cadence Equalizer | ⬜ pending | — |
 | 13 | Goal Horizon | ⬜ pending | — |
@@ -1784,3 +1784,66 @@ No other real bugs found — `formatTokensCompact`, `hiddenCount`'s
 degraded gracefully by design.
 `bun test packages/coding-agent/test/memory-crystals.test.ts`: 36 pass,
 0 fail. Root `bun run check` green across all workspaces after the fix.
+
+### 10. Context Constellation — hardening notes
+
+Added 17 edge-case behavioral tests to
+`packages/coding-agent/test/context-constellation.test.ts` (41 total, up
+from 24), covering `sky.ts`'s pure math under adversarial (`NaN`/`Infinity`)
+inputs, `ConstellationState` clock-skew/NaN-poisoning edge cases,
+out-of-bounds rendering, and controller dispose/remount idempotency:
+
+- **Real bug found and fixed — a new shape, not the recurring glyph-ramp
+  one**: unlike every prior hardening pass (features #1-9, all of which
+  hit the same "array-lookup glyph helper missing `?? GLYPHS[0]`" bug),
+  Context Constellation has no such array — its glyphs are fixed
+  constants, not a fraction-indexed ramp. Instead, `sweepProgress`'s own
+  clamp (`durationMs <= 0 || elapsedMs >= durationMs`) leaves a non-finite
+  `elapsedMs` **or** `durationMs` unclamped (neither branch is true for
+  `NaN`), so `easeOutCubic(NaN / durationMs)` returns `NaN`. That `NaN`
+  then flows into `lerpCells`, whose own clamp (`progress <= 0 ? 0 :
+  progress >= 1 ? 1 : progress`) also leaves `NaN` unclamped, so
+  `Math.round(from + (to - from) * NaN)` is `NaN` — and in
+  `renderConstellationRow`, a `NaN` `displayed` count makes `rank >=
+  displayed` false for **every** rank, so the entire grid renders as
+  permanently fully-lit stars regardless of the real fill state, and
+  (per the sweep's "never cleared" design) stays corrupted forever, not
+  just for one frame. This is worse than the glyph-ramp bugs' single
+  `"undefined"` glyph — a full-grid, permanent visual lie. Fixed by
+  adding `!Number.isFinite(elapsedMs) || !Number.isFinite(durationMs)` to
+  `sweepProgress`'s early-return-1 guard, so a bad clock reading now
+  snaps the sweep straight to its real target instead of corrupting
+  every future frame. Like most of this run's fixes, unreachable via the
+  real pipeline today (`DEFAULT_FRAME_SCHEDULER`'s `now()` is always
+  finite, and `durationMs` always defaults to the `SWEEP_DURATION_MS`
+  constant) — fixed anyway since both are exported pure functions any
+  future caller could feed directly, and the fix is free.
+- **`lerpCells(from, to, NaN)` still propagates `NaN`** — left
+  undocumented-in-code (no independent guard added) since its only real
+  call site (`displayedFilledCells`) can no longer feed it a `NaN`
+  progress after the `sweepProgress` fix above; covered by a test that
+  locks in the current pass-through behavior as a known, currently-dead
+  quirk rather than silently leaving it untested.
+- **`clampPercent`/`cellsForPercent` were already correctly guarded**:
+  both already had `Number.isFinite` checks before this pass (unlike
+  `sweepProgress`), so `NaN`/`±Infinity` percent/cells inputs were
+  already degrading to `0` gracefully — confirmed by test, no fix
+  needed.
+- **`RANK_OF_CELL[cellIndex] ?? 0` fallback** for an out-of-bounds cell
+  index (a `rowStart` past the grid) was previously only implicit in the
+  code, never exercised by a test — confirmed it renders a valid
+  lit/unlit glyph, never the literal string `"undefined"`.
+- **`renderConstellationRow` with `rowCells = 0`** renders an empty
+  string without throwing (the `for` loop simply never iterates).
+- **100% usage renders every cell lit with no dangling comet/flare**
+  once fully settled — confirmed the grid saturates cleanly at the top
+  end, mirroring similar saturation checks in other features' hardening
+  passes.
+- **Controller dispose idempotency**: `dispose()` before any mount is a
+  safe no-op; a second `dispose()` call after a mount does not re-clear
+  the widget; a `"context"` event arriving after `dispose()` remounts a
+  fresh animated widget cleanly with state intact.
+
+`bun test packages/coding-agent/test/context-constellation.test.ts`: 41
+pass, 0 fail. Root `bun run check` green across all workspaces after the
+fix. Bead: oh-my-pi-cag.

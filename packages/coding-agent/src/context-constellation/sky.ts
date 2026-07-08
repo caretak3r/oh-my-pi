@@ -77,7 +77,8 @@ function easeOutCubic(t: number): number {
  * `durationMs` has passed.
  */
 export function sweepProgress(elapsedMs: number, durationMs: number = SWEEP_DURATION_MS): number {
-	if (durationMs <= 0 || elapsedMs >= durationMs) return 1;
+	if (!Number.isFinite(elapsedMs) || !Number.isFinite(durationMs) || durationMs <= 0 || elapsedMs >= durationMs)
+		return 1;
 	if (elapsedMs <= 0) return 0;
 	return easeOutCubic(elapsedMs / durationMs);
 }
