@@ -172,6 +172,12 @@ Loader behavior:
 - Escape cancels an in-progress auto-compaction, handoff generation, or auto-retry: the editor's single `onEscape` handler dispatches on live session state (`isCompacting`/`isGeneratingHandoff`/`isRetrying`) and calls the matching abort method, rather than swapping the handler.
 - On end/cancel paths, controllers stop/clear the loader components.
 
+Auto-compaction status (condense animation vs. plain loader):
+
+- `EventController` lazily builds a shared `AnimationHost`/`MotionPolicy` pair (`#ensureAnimation()`, from `@oh-my-pi/pi-animation`) resolved from the `display.animations` setting, and reuses it across compactions; it is disposed on controller teardown and on session switch.
+- When the resolved motion tier is not `off`, `statusContainer` hosts a `CompactionVacuumWidget` (the in-place condense animation) instead of the plain `autoCompactionLoader`; when the tier is `off` (setting `off`, non-TTY, CI, `NO_COLOR`, `TERM=dumb`, or render backpressure), the plain `Loader` fallback is used exactly as before.
+- On completion, a successful condense animation is followed by a settle line committed to the transcript with real before→after token counts and a strategy-specific "kept" caption (`formatCompactionSettle`, `packages/coding-agent/src/modes/components/compaction-vacuum.ts`); aborted/skipped/failed compactions and the plain-loader fallback never emit a settle line.
+
 ## Mode transitions and backgrounding
 
 ### Bash/Python input modes

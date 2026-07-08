@@ -20,6 +20,8 @@ Both are persisted as session entries and converted back into user-context messa
 - `packages/coding-agent/src/session/messages.ts`
 - `packages/coding-agent/src/extensibility/hooks/types.ts`
 - `packages/coding-agent/src/config/settings-schema.ts`
+- `packages/coding-agent/src/modes/components/compaction-vacuum.ts` (condense animation + settle line)
+- `packages/coding-agent/src/modes/controllers/event-controller.ts` (drives the animation/settle UI off session events)
 
 ## Session entry model
 
@@ -144,6 +146,15 @@ The automatic paths are intentionally different:
 ### Display transcript
 
 Compaction no longer visually restarts the conversation. The TUI renders the **display transcript** (`buildSessionContext({ transcript: true })` / `AgentSession.buildTranscriptSessionContext()`): every path entry in chronological order, with each compaction shown inline as a slim divider — `── 📷 compacted · ctrl+o ──` — at the point it fired. Expanding (ctrl+o) reveals the summary. Only the LLM context resets at the compaction boundary; the scrollback above the divider stays intact, including across session resume.
+
+### Condense animation and settle line
+
+While an auto-compaction runs, `EventController` shows one of two transient status widgets, gated by the `display.animations` setting (`full`/`subtle`/`off`) via the shared `@oh-my-pi/pi-animation` `MotionPolicy`:
+
+- **Motion on** (`full`/`subtle`, TTY, no backpressure): a `CompactionVacuumWidget` condense animation — older transcript depicted flowing into a summary node — replaces the plain loader.
+- **Motion off** (setting `off`, non-TTY, CI, `NO_COLOR`, `TERM=dumb`, or render backpressure): the plain `autoCompactionLoader` spinner, unchanged from before.
+
+Only when the animation ran does a successful compaction append a settle line to the transcript, built by `formatCompactionSettle()` from a real before→after token count plus a strategy-specific "kept" caption (e.g. `Auto context-full · 142k → 38k (−104k, kept goals, open files, TODOs)`). The settle line is only emitted for genuine reclamation (`after < before`, both known and positive); aborted, skipped, or failed compactions — and any run through the plain-loader fallback — fall back to the plain completion message instead of claiming a false or negative reclaim.
 
 ### Pre-compaction pruning
 
@@ -419,5 +430,6 @@ From `settings-schema.ts`:
 - `compaction.idleTimeoutSeconds` = `300`
 - `branchSummary.enabled` = `false`
 - `branchSummary.reserveTokens` = `16384`
+- `display.animations` = `"full"` (`"subtle"`, `"off"` also supported) — gates the auto-compaction condense animation and settle line; see [Condense animation and settle line](#condense-animation-and-settle-line).
 
 These values are consumed at runtime by `AgentSession` and compaction/branch summarization modules.
