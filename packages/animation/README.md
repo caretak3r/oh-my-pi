@@ -17,8 +17,10 @@ family shares **one** timer, **one** cadence policy, and **one** cleanup path:
   Subscribers are notified when the resolved tier changes.
 - **`AnimatedWidget`** — a `Component` base that subscribes to a host on mount,
   repaints component-scoped via `tui.requestComponentRender(this)` only when the
-  rendered text changed, and unsubscribes idempotently on `dispose()`. Under tier
-  `off` it renders one static frame and never subscribes.
+  rendered text changed, and tracks live `MotionPolicy` tier changes: an off<->on
+  crossing starts or stops the frame-clock subscription with a forced repaint,
+  no remount needed. `dispose()` unsubscribes from both the host and the policy
+  and is idempotent. Under tier `off` it renders one static frame.
 - **`BackpressureSignal`** — a read-only "render under pressure" reader that the kit
   consults to shed frames. The core TUI exposes the backing signal
   (`renderUnderPressure` / `lastFrameCostMs`) through the `tui` a widget factory

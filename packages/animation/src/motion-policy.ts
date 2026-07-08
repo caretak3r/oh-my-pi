@@ -2,7 +2,8 @@ import type { BackpressureSignal } from "./backpressure";
 
 /**
  * Resolved motion tier the whole animated-plugin family shares.
- * - `off`: no motion; widgets render one static frame and never subscribe.
+ * - `off`: no motion; widgets render one static frame and stay unsubscribed
+ *   until the tier changes.
  * - `subtle`: reduced cadence (~12fps).
  * - `full`: full cadence (~30fps).
  */
