@@ -502,8 +502,79 @@ export paths.
   (not `Date.now()`), and the widget reads that same injected clock for
   `rippleElapsedMs` (not the host's own mount-relative `elapsedMs`).
 
+### 9. 💎 Memory Crystals (oh-my-pi-fbc)
+
+**Status:** done.
+
+**Grounding:** `auto_compaction_end`'s `result` field does **not** hold up as
+literally described — tracing every emission site in `agent-session.ts`
+shows `result` is `undefined` on every `handoff`/`shake` action and on every
+`aborted`/`skipped`/`errorMessage` path; it is only ever populated on a clean
+`context-full`/`snapcompact` success, and even then carries no message-count
+field and no `tokensAfter` (only `summary`/`shortSummary`/`tokensBefore`).
+Re-grounded per the same "verify the signal is real" rule that reshaped
+Agent Fleet: the controller gates on `event.result !== undefined` (which
+already implies a successful, non-aborted, non-skipped compaction) and sizes
+each crystal's magnitude off `tokensBefore` alone, dropping the "number of
+messages compacted" dimension the idea doc implied rather than inventing a
+field the payload doesn't have. The pre-Wave-2 `compaction-vacuum` feature
+this idea says to "extend" lives only on the separate, unmerged
+`feat/compaction-vacuum` branch — not present in this branch's working tree
+— so Memory Crystals ships standalone rather than literally extending
+anything; noted here rather than silently reinterpreted.
+
+**Module:** `packages/coding-agent/src/memory-crystals/` (`crystal.ts`,
+`state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createMemoryCrystalsExtension` pushed as a ninth inline
+extension in `sdk.ts` (`createAgentSession`), subscribed to
+`auto_compaction_end`. Widget placed `belowEditor` (the aboveEditor cluster
+already has five features; this balances the split, and no other feature
+claims a `"memory-crystals"` widget key). Reuses the existing shared
+`animations` setting; no new settings-schema entries. New
+`./memory-crystals` and `./memory-crystals/*` package.json export paths.
+
+**Test command:** `bun test packages/coding-agent/test/memory-crystals.test.ts`
+— 21 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- Each successful compaction crystallizes into one gem appended to a
+  persistent tray, capped at `MAX_DISPLAYED_CRYSTALS` (10) with a trailing
+  `+N more` count once exceeded — mirroring Session Bonsai's leaf-pruning /
+  Todo Meteors' ember-cap convention. The running `totalCrystals`/
+  `totalTokensReclaimed` counters keep counting past the cap; only the
+  *displayed* tray drops the oldest entries, never silently discarding the
+  totals.
+- Gem size/color is a magnitude tier (`crystalMagnitude`, clamped against a
+  fixed `MAX_REFERENCE_TOKENS` (40,000) ceiling) rather than an adaptive/
+  rolling max, mirroring Cost Candle's `WAX_REFERENCE_COST_USD`/Token Tide's
+  `MAX_REFERENCE_RATE` normalization pattern.
+- A freshly-spawned crystal flashes `accent` for a brief `SPARKLE_DURATION_MS`
+  (500ms) landing window — an exhale-shaped decay reused from Reflection
+  Ripple's `reflectDimAmount` envelope shape — before settling into its
+  plain magnitude-tiered resting color (`dim`/`syntaxType`/`success`). The
+  `subtle` tier skips the sparkle entirely and always shows the resting
+  color, matching Cost Candle's "subtle ignores the transient disturbance"
+  precedent.
+- Like Tool Constellation/Cost Candle, the widget mounts lazily on the first
+  real signal (the first successful compaction) rather than pre-mounting an
+  empty tray — a session with no compactions shows nothing.
+- Off-tier fallback: `"◆ N crystal(s) · X tokens reclaimed"`, matching Cost
+  Candle's `"$N total · $M/msg avg"` static-line convention.
+- Same dual-clock-seam pattern as every other Wave 2 feature: the controller
+  stamps `applyCompactionEnd` against the shared `FrameScheduler`'s relative
+  clock (not `Date.now()`), and the widget reads that same injected clock for
+  sparkle-decay math (not the host's own mount-relative `elapsedMs`).
+- Like every prior Wave 2 feature except Breathing Border, this mount is
+  permanent for the extension's lifetime once first created —
+  `backpressureFromTui(tui)` is not wired into the `AnimationHost`
+  construction (same structural mount-sequence limitation documented
+  throughout this file).
+
 ## Ideas not yet started
 
-Ideas 9–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Memory Crystals,
-Context Constellation, Diff Bloom, Cadence Equalizer, Goal Horizon, Model
-Weather Vane, Prompt Charge) remain unstarted.
+Ideas 10–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Context
+Constellation, Diff Bloom, Cadence Equalizer, Goal Horizon, Model Weather
+Vane, Prompt Charge) remain unstarted.

@@ -1849,6 +1849,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		inlineExtensions.push((await import("./agent-fleet")).createAgentFleetExtension);
 		inlineExtensions.push((await import("./cost-candle")).createCostCandleExtension);
 		inlineExtensions.push((await import("./reflection-ripple")).createReflectionRippleExtension);
+		inlineExtensions.push((await import("./memory-crystals")).createMemoryCrystalsExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}

@@ -455,6 +455,14 @@
       "types": "./src/memory-backend/*.ts",
       "import": "./src/memory-backend/*.ts"
     },
+    "./memory-crystals": {
+      "types": "./src/memory-crystals/index.ts",
+      "import": "./src/memory-crystals/index.ts"
+    },
+    "./memory-crystals/*": {
+      "types": "./src/memory-crystals/*.ts",
+      "import": "./src/memory-crystals/*.ts"
+    },
     "./hindsight": {
       "types": "./src/hindsight/index.ts",
       "import": "./src/hindsight/index.ts"
