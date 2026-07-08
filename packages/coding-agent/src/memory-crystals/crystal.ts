@@ -29,7 +29,7 @@ const GEM_GLYPHS = ["·", "⋄", "◇", "◆"] as const;
 export function gemGlyph(magnitude: number): string {
 	const clamped = magnitude <= 0 ? 0 : magnitude >= 1 ? 1 : magnitude;
 	const index = Math.min(GEM_GLYPHS.length - 1, Math.floor(clamped * GEM_GLYPHS.length));
-	return GEM_GLYPHS[index];
+	return GEM_GLYPHS[index] ?? GEM_GLYPHS[0];
 }
 
 /**

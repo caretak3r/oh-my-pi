@@ -1186,7 +1186,7 @@ the pass is resumable across iterations.
 | 6 | Agent Fleet | ✅ done | oh-my-pi-nv4 |
 | 7 | Cost Candle | ✅ done | oh-my-pi-0a2 |
 | 8 | Reflection Ripple | ✅ done | oh-my-pi-cdc |
-| 9 | Memory Crystals | ⬜ pending | — |
+| 9 | Memory Crystals | ✅ done | oh-my-pi-91d |
 | 10 | Context Constellation | ⬜ pending | — |
 | 11 | Diff Bloom | ⬜ pending | — |
 | 12 | Cadence Equalizer | ⬜ pending | — |
@@ -1712,3 +1712,75 @@ gracefully by design.
 `bun test packages/coding-agent/test/reflection-ripple.test.ts`: 47
 pass, 0 fail. Root `bun run check` green across all workspaces after the
 fix.
+
+### 9. Memory Crystals — hardening notes
+
+Added 15 edge-case behavioral tests to
+`packages/coding-agent/test/memory-crystals.test.ts` (36 total, up from
+21), covering `crystal.ts`'s pure magnitude/glyph/sparkle/format math
+under adversarial (`NaN`/`Infinity`) inputs, `MemoryCrystalsState`'s
+clock-skew and NaN-poisoned-spawn edge cases, byte-stable rendering of
+an adversarial wide tray, and controller dispose/remount idempotency:
+
+- **Real bug found and fixed**: `gemGlyph` had the exact same
+  missing-fallback shape as every prior glyph-ramp bug this run has
+  found (Session Bonsai's `budGlyph`, Todo Meteors'
+  `meteorGlyph`/`emberGlyph`, Breathing Border's `brightnessGlyph`,
+  Agent Fleet's `fireflyGlyph`, Cost Candle's `flameGlyph`, Reflection
+  Ripple's `ringGlyph`) — this is the **eighth** occurrence. `gemGlyph`'s
+  own clamp (`magnitude <= 0 ? 0 : magnitude >= 1 ? 1 : magnitude`)
+  leaves `NaN` unclamped (neither branch is true for `NaN`), so
+  `Math.floor(NaN * GEM_GLYPHS.length)` is `NaN` and `GEM_GLYPHS[NaN]`
+  is `undefined`. Unlike most prior occurrences, `NaN` is **not**
+  reachable through the real pipeline today — `MemoryCrystalsState`
+  always feeds `gemGlyph` a `magnitude` computed via
+  `crystalMagnitude(safeTokens)`, whose own `Number.isFinite` guard
+  already forecloses `NaN`. Fixed anyway (same `?? GEM_GLYPHS[0]`
+  pattern as all seven prior fixes) since `gemGlyph` is an exported pure
+  function any future caller could feed directly, and the fix is free —
+  documented as "latent, not currently reachable" rather than
+  overstating exploitability.
+- **A genuinely new NaN-poisoning shape, distinct from Cost Candle's
+  "permanently poisons all future decay math"**: `applyCompactionEnd`
+  stamps `spawnedAt` straight from its `elapsedMs` clock-reading
+  parameter with **no** `Number.isFinite` validation (unlike
+  `tokensBefore`, which the method does validate before use). A single
+  `NaN` clock reading at record time permanently poisons that one
+  crystal's `spawnedAt` — but because `renderMemoryCrystalsRow`'s sparkle
+  gate is written as `sinceSpawn >= 0 ? sparkleIntensity(sinceSpawn) : 0`
+  (a `>=`-guard, not a `<`-stay-pending guard), `NaN >= 0` is `false` and
+  the crystal simply never sparkles again — it silently reads as
+  "already settled" rather than corrupting output or hanging, the same
+  benign-looking-but-worth-noting outcome as Reflection Ripple's
+  `settleIfDone` finding, reached through a different guard shape.
+- **`sparkleIntensity(elapsedMs, Infinity)` is a documented-not-fixed
+  quirk**: an infinite `durationMs` makes `elapsedMs / durationMs`
+  always `0`, so `cos(0)` keeps the crystal at full brightness (`1`)
+  forever regardless of `elapsedMs` — backwards from the "decays to 0"
+  intent. Provably unreachable via the real pipeline (`durationMs`
+  always defaults to the `SPARKLE_DURATION_MS` constant, never an
+  event-derived value), so left as a locked-in-by-test quirk rather than
+  a fix, matching Cost Candle's `waxRemaining`/`gutterIntensity` and
+  Reflection Ripple's `Infinity`-clamping precedent for pure-function
+  edge cases with no real call site.
+- **`crystalMagnitude(Infinity)` is `0`, not `1`**: `Infinity` fails the
+  `Number.isFinite` guard before the ratio is computed, so an infinitely
+  large token count reads as "nothing to reclaim" rather than "maximally
+  large" — the same `!Number.isFinite(x)` -> safe-default-not-clamped-max
+  shape already documented for Cost Candle's `waxRemaining`.
+- **Backward clock skew across compactions** (`elapsedMs` decreasing
+  between two `applyCompactionEnd` calls) is stored as-is per-crystal
+  with no reordering or crash — the tray is append-ordered by call
+  order, not by `spawnedAt`, so out-of-order clock readings can't
+  scramble tray order the way they might a time-sorted structure.
+- **Controller dispose idempotency**: `dispose()` before any compaction
+  has ever mounted a widget is a safe no-op; `dispose()` called twice in
+  a row after a mount is idempotent (no double clear); a new compaction
+  arriving after `dispose()` remounts a fresh animated widget cleanly
+  (state survives — only the mount tore down).
+
+No other real bugs found — `formatTokensCompact`, `hiddenCount`'s
+`Math.max(0, ...)` floor, and every remaining `NaN`/`Infinity` input
+degraded gracefully by design.
+`bun test packages/coding-agent/test/memory-crystals.test.ts`: 36 pass,
+0 fail. Root `bun run check` green across all workspaces after the fix.

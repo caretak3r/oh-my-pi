@@ -249,24 +249,25 @@ describe("memory crystals widget lifecycle", () => {
 	});
 });
 
-describe("memory crystals controller", () => {
-	function recordingContext(overrides: Partial<MemoryCrystalsContext> = {}): {
-		ctx: MemoryCrystalsContext;
-		calls: Array<{ key: string; content: unknown }>;
-	} {
-		const calls: Array<{ key: string; content: unknown }> = [];
-		const ctx: MemoryCrystalsContext = {
-			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
-			theme: idTheme,
-			setWidget: (key, content) => calls.push({ key, content }),
-			...overrides,
-		};
-		return { ctx, calls };
-	}
+/** Hoisted to module scope so both the base controller suite and the hardening suite can share it. */
+function recordingContext(overrides: Partial<MemoryCrystalsContext> = {}): {
+	ctx: MemoryCrystalsContext;
+	calls: Array<{ key: string; content: unknown }>;
+} {
+	const calls: Array<{ key: string; content: unknown }> = [];
+	const ctx: MemoryCrystalsContext = {
+		hasUI: true,
+		isTTY: true,
+		env: {},
+		motionSetting: "full",
+		theme: idTheme,
+		setWidget: (key, content) => calls.push({ key, content }),
+		...overrides,
+	};
+	return { ctx, calls };
+}
 
+describe("memory crystals controller", () => {
 	it("mounts an animated widget on the first successful compaction and mutates state in place afterward", () => {
 		const scheduler = manualScheduler();
 		const controller = new MemoryCrystalsController({ scheduler });
@@ -341,5 +342,133 @@ describe("memory crystals controller", () => {
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
+	});
+});
+
+describe("memory crystals hardening — edge cases", () => {
+	it("gemGlyph(NaN) falls back to the dimmest glyph instead of rendering undefined (regression test)", () => {
+		expect(gemGlyph(Number.NaN)).toBe(gemGlyph(0));
+		expect(gemGlyph(Number.NaN)).not.toBeUndefined();
+	});
+
+	it("gemGlyph clamps +/-Infinity to the ramp's brightest/dimmest ends", () => {
+		expect(gemGlyph(Number.POSITIVE_INFINITY)).toBe(gemGlyph(1));
+		expect(gemGlyph(Number.NEGATIVE_INFINITY)).toBe(gemGlyph(0));
+	});
+
+	it("crystalMagnitude treats +Infinity tokensBefore as zero (fails the Number.isFinite guard), not maximal", () => {
+		expect(crystalMagnitude(Number.POSITIVE_INFINITY)).toBe(0);
+		expect(crystalMagnitude(Number.NEGATIVE_INFINITY)).toBe(0);
+	});
+
+	it("sparkleIntensity propagates NaN for a NaN elapsedMs or durationMs, but callers never observe it as a crash", () => {
+		expect(Number.isNaN(sparkleIntensity(Number.NaN))).toBe(true);
+		expect(Number.isNaN(sparkleIntensity(100, Number.NaN))).toBe(true);
+		// A NaN sparkle intensity fails every `> 0.5` comparison in the renderer, so it silently
+		// reads as "not sparkling" rather than corrupting output — verified below at the render level.
+	});
+
+	it("sparkleIntensity(elapsedMs, Infinity) never crashes: an infinite duration reads as 'just spawned' at any finite elapsedMs", () => {
+		// elapsedMs / Infinity is always 0, so cos(0) keeps the crystal at full brightness forever — an
+		// infinite sparkle duration is a degenerate input no real caller produces (durationMs is always the
+		// SPARKLE_DURATION_MS constant), documented here rather than "fixed" since it can't reach this path.
+		expect(sparkleIntensity(1000, Number.POSITIVE_INFINITY)).toBe(1);
+		expect(sparkleIntensity(1_000_000, Number.POSITIVE_INFINITY)).toBe(1);
+	});
+
+	it("formatTokensCompact treats +/-Infinity as zero, matching its NaN/negative handling", () => {
+		expect(formatTokensCompact(Number.POSITIVE_INFINITY)).toBe("0");
+		expect(formatTokensCompact(Number.NEGATIVE_INFINITY)).toBe("0");
+	});
+
+	it("a NaN-poisoned spawnedAt (NaN clock at record time) never sparkles and never renders undefined", () => {
+		const state = new MemoryCrystalsState();
+		state.applyCompactionEnd(5000, "poisoned clock", "context-full", Number.NaN);
+		const snapshot = state.snapshot();
+		expect(snapshot.crystals[0].spawnedAt).toBeNaN();
+
+		const row = renderMemoryCrystalsRow(snapshot, 0, idTheme, "full");
+		expect(row).not.toContain("undefined");
+		// sinceSpawn = 0 - NaN = NaN, which fails the `>= 0` guard, so it renders the resting glyph.
+		expect(row).toBe(gemGlyph(snapshot.crystals[0].magnitude));
+	});
+
+	it("backward clock skew across compactions is stored as-is without throwing or reordering the tray", () => {
+		const state = new MemoryCrystalsState();
+		state.applyCompactionEnd(1000, "first", "context-full", 500);
+		state.applyCompactionEnd(2000, "second (earlier clock reading)", "context-full", 100);
+		const snapshot = state.snapshot();
+		expect(snapshot.crystals[0].spawnedAt).toBe(500);
+		expect(snapshot.crystals[1].spawnedAt).toBe(100);
+		expect(snapshot.crystals.map(c => c.summary)).toEqual(["first", "second (earlier clock reading)"]);
+	});
+
+	it("hiddenCount never goes negative even immediately after construction", () => {
+		const state = new MemoryCrystalsState();
+		expect(state.snapshot().hiddenCount).toBe(0);
+	});
+
+	it("off-tier text never renders undefined/NaN even after a NaN-tokens compaction", () => {
+		const state = new MemoryCrystalsState();
+		state.applyCompactionEnd(Number.NaN, "weird", "context-full", 0);
+		const text = renderMemoryCrystalsOffText(state.snapshot());
+		expect(text).not.toContain("undefined");
+		expect(text).not.toContain("NaN");
+		expect(text).toBe("◆ 1 crystal · 0 tokens reclaimed");
+	});
+
+	it("renders a wide adversarial tray (many crystals, mixed NaN/Infinity/negative tokens) with no undefined/NaN text", () => {
+		const state = new MemoryCrystalsState();
+		const inputs = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -100, 0, 40_000, 1e9];
+		for (const [i, tokens] of inputs.entries()) state.applyCompactionEnd(tokens, `pass ${i}`, "context-full", i);
+		const row = renderMemoryCrystalsRow(state.snapshot(), 0, idTheme, "full");
+		expect(row).not.toContain("undefined");
+		expect(row).not.toContain("NaN");
+	});
+
+	it("controller: onAutoCompactionEnd before any mount, then dispose(), is a safe no-op", () => {
+		const controller = new MemoryCrystalsController();
+		const { ctx, calls } = recordingContext();
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("controller: dispose() is idempotent when called twice in a row", () => {
+		const scheduler = manualScheduler();
+		const controller = new MemoryCrystalsController({ scheduler });
+		const { ctx, calls } = recordingContext();
+		controller.onAutoCompactionEnd(successfulCompactionEnd(1000), ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(callsAfterFirstDispose); // no extra setWidget(undefined) call
+	});
+
+	it("controller: remounts cleanly if a new compaction arrives after dispose()", () => {
+		const scheduler = manualScheduler();
+		const controller = new MemoryCrystalsController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onAutoCompactionEnd(successfulCompactionEnd(1000), ctx);
+		controller.dispose(ctx);
+		expect(calls[calls.length - 1].content).toBeUndefined();
+
+		controller.onAutoCompactionEnd(successfulCompactionEnd(2000), ctx);
+		const last = calls[calls.length - 1].content;
+		expect(typeof last).toBe("function"); // remounted an animated widget, not left dormant
+		expect(controller.state.snapshot().totalCrystals).toBe(2); // state survived dispose (only the mount tore down)
+	});
+
+	it("controller: an empty summary string on a real compaction still renders without crashing", () => {
+		const controller = new MemoryCrystalsController();
+		const { ctx, calls } = recordingContext();
+		controller.onAutoCompactionEnd(
+			successfulCompactionEnd(1000, {
+				result: { summary: "", tokensBefore: 1000, firstKeptEntryId: "entry-1" },
+			}),
+			ctx,
+		);
+		expect(calls).toHaveLength(1);
+		expect(controller.state.snapshot().crystals[0].summary).toBe("");
 	});
 });
