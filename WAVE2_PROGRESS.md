@@ -1191,7 +1191,7 @@ the pass is resumable across iterations.
 | 11 | Diff Bloom | ✅ done | oh-my-pi-9gm |
 | 12 | Cadence Equalizer | ✅ done | oh-my-pi-9md |
 | 13 | Goal Horizon | ✅ done | oh-my-pi-xk9 |
-| 14 | Model Weather Vane | ⬜ pending | — |
+| 14 | Model Weather Vane | ✅ done | oh-my-pi-bgp |
 | 15 | Prompt Charge | ⬜ pending | — |
 
 ### 1. Tool Constellation — hardening notes
@@ -2078,6 +2078,70 @@ module scope, matching the pattern established since Agent Fleet.
   `warning`/`syntaxType`/etc. position-based tags leaking through, matching
   the documented "status color wins outright, not blended with position"
   design decision.
+
+### 14. Model Weather Vane — hardening notes
+
+Added 18 edge-case behavioral tests to
+`packages/coding-agent/test/model-weather-vane.test.ts` (45 total, up from
+27), covering `vane.ts`'s pure math under adversarial `NaN`/`Infinity`
+inputs (`spinProgress`, `spinDisplayIndex`, `modelDirectionIndex`,
+`truncateLabel`), `ModelWeatherVaneState`'s NaN-poisoned-clock-at-switch-
+time and backward-clock-skew edge cases, rendering-level "never renders
+literal `undefined`" checks under both a NaN-poisoned `spinStartAt` and a
+NaN widget-clock reading, an empty-provider rendering case, and controller
+dispose/remount idempotency (pre-mount dispose no-op, double dispose for
+both animated and static mounts, a message arriving after dispose
+remounting cleanly, widget double-dispose). Also hoisted the
+`recordingContext()` test helper from inside the `"model weather vane
+controller"` describe block to module scope, matching the pattern
+established since Agent Fleet.
+
+- **No reachable bug found — the first hardening pass since Cadence
+  Equalizer (feature #12) to close with zero fixes.** Every prior feature's
+  recurring glyph-ramp bug class (an array-lookup helper like
+  `RAMP[fractionIndex]` missing a `?? RAMP[0]` fallback) does not apply
+  here: `modelDirectionIndex` derives its `DIRECTION_GLYPHS`/`VANE_COLORS`
+  index via `fnv1a(modelId) % DIRECTION_GLYPHS.length` on an always-string
+  input — structurally incapable of producing `NaN` — rather than via a
+  clamped `[0,1]` fraction. The one function that *does* produce `NaN` from
+  adversarial input, `spinDisplayIndex(from, to, NaN)` (its own
+  `progress <= 0 ? 0 : progress >= 1 ? 1 : progress` clamp leaves `NaN`
+  unclamped, same shape as every fixed glyph-ramp bug), is never actually
+  reachable through the real render path: `currentEmblem` only calls it
+  behind `if (progress < 1)`, and `NaN < 1` is `false`, so a `NaN` `progress`
+  (from either a `NaN`-poisoned `spinStartAt`, stamped by an unvalidated
+  clock reading in `recordAssistantMessage`, or a `NaN` widget-clock read in
+  `renderModelWeatherVaneRow`) always falls through to the safe *settled*
+  branch instead of the buggy mid-spin branch. Locked in with a dedicated
+  `spinDisplayIndex(NaN)` pure-function test (documenting the latent quirk)
+  plus two rendering-level tests proving the real pipeline never reaches it.
+- **This is the second feature in the run (after Reflection Ripple/Diff
+  Bloom's `settleIfDone`) where a `<`-comparison gate is the load-bearing
+  reason `NaN` degrades safely rather than corrupting output** — but here
+  the gate lives in the *widget's* `currentEmblem` dispatcher, not a state
+  machine's settle check. Worth checking this exact "does the mid-
+  transition branch use `<`/`>` (safe for `NaN`, defaults to the settled
+  branch) or `<=`/`>=` (lets `NaN` through unclamped)" question as the
+  first thing on Prompt Charge's hardening pass, the one remaining feature.
+- **`truncateLabel(modelId, NaN)` degrades to a bare `"…"`** (`modelId
+  .slice(0, maxLength - 1)` becomes `.slice(0, NaN)` which coerces to
+  `.slice(0, 0)`) — a real quirk but provably unreachable, since every real
+  call site passes the `MAX_LABEL_LENGTH` constant, never a computed value.
+  Locked in with a test rather than fixed, matching this run's established
+  "latent, not currently reachable" documentation convention (Memory
+  Crystals' `gemGlyph`, Context Constellation's `sweepProgress`).
+- **`ModelWeatherVaneState.recordAssistantMessage` shares the same
+  unvalidated-clock-at-switch-time gap as Cost Candle/Memory
+  Crystals/Diff Bloom/Goal Horizon** (no `Number.isFinite` guard on `now`
+  before stamping `spinStartAt`), but the consequence here is the most
+  benign of any occurrence so far: because the mid-spin dispatch gate is
+  `<` rather than a state-machine `settleIfDone`, a `NaN`-poisoned
+  `spinStartAt` doesn't even need a *second* event to resolve — the very
+  next render call already falls through to the settled branch, with no
+  intermediate "stuck" state possible at all.
+
+13 of 15 features now hardened; only Prompt Charge (feature #15) remains,
+plus the integration/gallery demo.
 
 `bun test packages/coding-agent/test/goal-horizon.test.ts`: 44 pass,
 0 fail. Root `bun check` green across all workspaces after the fix.
