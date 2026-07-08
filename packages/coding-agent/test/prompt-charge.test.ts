@@ -54,6 +54,25 @@ function inputEvent(text: string): InputEvent {
 	return { type: "input", text, source: "interactive" };
 }
 
+/** Shared controller-context builder, hoisted to module scope so the hardening describe block can reuse it. */
+function recordingContext(overrides: Partial<PromptChargeContext> = {}): {
+	ctx: PromptChargeContext;
+	calls: Array<{ key: string; content: unknown }>;
+} {
+	const calls: Array<{ key: string; content: unknown }> = [];
+	const ctx: PromptChargeContext = {
+		hasUI: true,
+		isTTY: true,
+		env: {},
+		motionSetting: "full",
+		theme: idTheme,
+		getEditorText: () => "",
+		setWidget: (key, content) => calls.push({ key, content }),
+		...overrides,
+	};
+	return { ctx, calls };
+}
+
 describe("prompt charge pure math", () => {
 	it("chargeFraction is 0 for empty/negative input and climbs monotonically with length", () => {
 		expect(chargeFraction(0)).toBe(0);
@@ -297,24 +316,6 @@ describe("PromptChargeWidget", () => {
 });
 
 describe("prompt charge controller", () => {
-	function recordingContext(overrides: Partial<PromptChargeContext> = {}): {
-		ctx: PromptChargeContext;
-		calls: Array<{ key: string; content: unknown }>;
-	} {
-		const calls: Array<{ key: string; content: unknown }> = [];
-		const ctx: PromptChargeContext = {
-			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
-			theme: idTheme,
-			getEditorText: () => "",
-			setWidget: (key, content) => calls.push({ key, content }),
-			...overrides,
-		};
-		return { ctx, calls };
-	}
-
 	it("mounts an animated widget unconditionally on the first mount() call", () => {
 		const controller = new PromptChargeController();
 		const { ctx, calls } = recordingContext();
@@ -407,5 +408,221 @@ describe("prompt charge controller", () => {
 		const { ctx, calls } = recordingContext();
 		controller.dispose(ctx);
 		expect(calls).toHaveLength(0);
+	});
+});
+
+describe("prompt charge hardening: adversarial pure math", () => {
+	it("chargeFraction(NaN) is the safe idle default, not a NaN escape", () => {
+		expect(chargeFraction(Number.NaN)).toBe(0);
+	});
+
+	it("chargeFraction(Infinity) saturates at just under 1, matching finite-large-input behavior", () => {
+		expect(chargeFraction(Number.POSITIVE_INFINITY)).toBe(1);
+		expect(chargeFraction(Number.NEGATIVE_INFINITY)).toBe(0);
+	});
+
+	it("releaseProgress treats a NaN elapsed (NaN elapsedMs or NaN releaseStartMs) as 0, not a NaN escape", () => {
+		expect(releaseProgress(Number.NaN, 0)).toBe(0);
+		expect(releaseProgress(100, Number.NaN)).toBe(0);
+		expect(releaseProgress(Number.NaN, Number.NaN)).toBe(0);
+	});
+
+	it("releaseProgress still resolves +/-Infinity elapsed to the correct boundary (1 / 0), unaffected by the NaN guard", () => {
+		expect(releaseProgress(Number.POSITIVE_INFINITY, 0)).toBe(1);
+		expect(releaseProgress(0, Number.POSITIVE_INFINITY)).toBe(0); // elapsed = -Infinity
+	});
+
+	it("releaseIntensity(chargeAtRelease, NaN) treats a NaN progress as fully decayed (0), not a NaN escape", () => {
+		expect(releaseIntensity(0.9, Number.NaN)).toBe(0);
+	});
+
+	it("releaseIntensity still resolves a >=1 progress to fully decayed, unaffected by the NaN guard", () => {
+		expect(releaseIntensity(0.9, 1)).toBe(0);
+		expect(releaseIntensity(0.9, 2)).toBe(0);
+	});
+
+	it("filledCells(NaN) is 0, not a NaN escape that would corrupt the bar", () => {
+		expect(filledCells(Number.NaN)).toBe(0);
+	});
+
+	it("filledCells still resolves +/-Infinity to the correct boundary (BAR_CELLS / 0), unaffected by the NaN guard", () => {
+		expect(filledCells(Number.POSITIVE_INFINITY)).toBe(BAR_CELLS);
+		expect(filledCells(Number.NEGATIVE_INFINITY)).toBe(0);
+	});
+
+	it("chargeBucket(NaN) classifies as idle, not full", () => {
+		expect(chargeBucket(Number.NaN)).toBe("idle");
+	});
+
+	it("chargeBucket still classifies +Infinity as full, unaffected by the NaN guard", () => {
+		expect(chargeBucket(Number.POSITIVE_INFINITY)).toBe("full");
+	});
+});
+
+describe("prompt charge hardening: rendering never emits literal NaN%/undefined text", () => {
+	it("a directly-injected NaN chargeAtRelease renders a clean idle bar and 0%, not 'NaN%'", () => {
+		// PromptChargeState.release() has no Number.isFinite guard on chargeAtRelease
+		// (unlike sampleEditorLength), matching the "unvalidated clock/parameter at
+		// record time" gap found in every other Wave 2 feature's hardening pass
+		// (Cost Candle, Memory Crystals, Diff Bloom, Goal Horizon, Model Weather
+		// Vane). Not reachable via the real controller (onInput always feeds
+		// chargeFraction(event.text.length), which can never produce NaN), but
+		// this proves the render path degrades safely if it ever were.
+		const state = new PromptChargeState();
+		state.release(Number.NaN, 100);
+		const row = renderPromptChargeRow(state.snapshot(), 100, idTheme, "full");
+		expect(row).not.toContain("NaN");
+		expect(row).not.toContain("undefined");
+		expect(row).toContain("▱".repeat(BAR_CELLS));
+		expect(row).toContain("0%");
+	});
+
+	it("a directly-injected NaN releaseStartAt renders cleanly at every tier", () => {
+		const snapshot = { typedChars: 0, releaseStartAt: Number.NaN, chargeAtRelease: 0.5 };
+		for (const tier of ["full", "subtle"] as const) {
+			const row = renderPromptChargeRow(snapshot, 100, idTheme, tier);
+			expect(row).not.toContain("NaN");
+			expect(row).not.toContain("undefined");
+		}
+	});
+
+	it("a NaN widget clock reading renders cleanly", () => {
+		const state = new PromptChargeState();
+		state.sampleEditorLength(50);
+		state.release(chargeFraction(50), 0);
+		const row = renderPromptChargeRow(state.snapshot(), Number.NaN, idTheme, "full");
+		expect(row).not.toContain("NaN");
+		expect(row).not.toContain("undefined");
+	});
+
+	it("renderPromptChargeOffText degrades to idle for a NaN chargeAtRelease rather than printing 'NaN%'", () => {
+		// The off-tier renderer's own `pct > 0` gate is false for NaN, so it falls
+		// through to the idle branch without needing an explicit NaN guard.
+		expect(renderPromptChargeOffText({ typedChars: 0, releaseStartAt: 0, chargeAtRelease: Number.NaN })).toBe(
+			"⚡ idle",
+		);
+	});
+
+	it("renderPromptChargeOffText degrades to idle for NaN typedChars with no release yet", () => {
+		expect(renderPromptChargeOffText({ typedChars: Number.NaN, releaseStartAt: undefined, chargeAtRelease: 0 })).toBe(
+			"⚡ idle",
+		);
+	});
+});
+
+describe("prompt charge hardening: state edge cases", () => {
+	it("sampleEditorLength clamps +Infinity to 0, same as NaN/negative — Number.isFinite(Infinity) is false", () => {
+		const state = new PromptChargeState();
+		state.sampleEditorLength(Number.POSITIVE_INFINITY);
+		expect(state.snapshot().typedChars).toBe(0);
+		const row = renderPromptChargeRow(state.snapshot(), 0, idTheme, "full");
+		expect(row).not.toContain("NaN");
+		expect(row).toContain("0%");
+	});
+
+	it("chargeFraction(Infinity) itself still saturates at 100% if ever fed a non-finite length directly", () => {
+		// sampleEditorLength forecloses this in practice (Infinity clamps to 0
+		// before it ever reaches chargeFraction), but chargeFraction is an
+		// exported pure function any future caller could feed directly.
+		const row = renderPromptChargeRow(
+			{ typedChars: Number.POSITIVE_INFINITY, releaseStartAt: undefined, chargeAtRelease: 0 },
+			0,
+			idTheme,
+			"full",
+		);
+		expect(row).toContain("100%");
+	});
+
+	it("release() with a backward-skewed now (before an already-recorded typedChars poll) still renders cleanly", () => {
+		const state = new PromptChargeState();
+		state.sampleEditorLength(50);
+		state.release(chargeFraction(50), -1000); // clock reading before the session's own origin
+		const row = renderPromptChargeRow(state.snapshot(), 0, idTheme, "full");
+		expect(row).not.toContain("NaN");
+		expect(row).not.toContain("undefined");
+	});
+
+	it("a zero-length release burst (chargeAtRelease 0) never displays above the live typed charge", () => {
+		const state = new PromptChargeState();
+		state.release(0, 0);
+		state.sampleEditorLength(200);
+		const withRelease = renderPromptChargeRow(state.snapshot(), 0, idTheme, "full");
+		const liveOnly = renderPromptChargeRow(
+			{ typedChars: 200, releaseStartAt: undefined, chargeAtRelease: 0 },
+			0,
+			idTheme,
+			"full",
+		);
+		expect(withRelease).toBe(liveOnly);
+	});
+});
+
+describe("prompt charge hardening: controller/widget dispose-remount idempotency", () => {
+	it("dispose before any mount() or onInput() call is a safe no-op", () => {
+		const controller = new PromptChargeController();
+		const { ctx, calls } = recordingContext();
+		controller.dispose(ctx);
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("double dispose after a real animated mount is idempotent", () => {
+		const scheduler = manualScheduler();
+		const controller = new PromptChargeController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.mount(ctx);
+		const factory = calls[0].content as (tui: typeof noopTui, theme: PromptChargeTheme) => PromptChargeWidget;
+		factory(noopTui, idTheme);
+
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(callsAfterFirstDispose); // no extra setWidget call
+	});
+
+	it("double dispose after a static off-tier mount is idempotent", () => {
+		const controller = new PromptChargeController();
+		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+
+		controller.mount(ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(callsAfterFirstDispose);
+	});
+
+	it("onInput after dispose remounts a fresh widget and starts a release burst", () => {
+		const scheduler = manualScheduler();
+		const controller = new PromptChargeController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.mount(ctx);
+		controller.dispose(ctx);
+		const callsBeforeRemount = calls.length;
+
+		controller.onInput(inputEvent("a".repeat(100)), ctx);
+		expect(calls.length).toBeGreaterThan(callsBeforeRemount);
+		expect(controller.state.snapshot().chargeAtRelease).toBeCloseTo(chargeFraction(100), 10);
+	});
+
+	it("PromptChargeWidget.dispose() is idempotent", () => {
+		const scheduler = manualScheduler();
+		const policy = new MotionPolicy(fullEnv, "full");
+		const host = new AnimationHost({ policy, scheduler });
+		const state = new PromptChargeState();
+		const widget = new PromptChargeWidget({
+			tui: noopTui,
+			host,
+			policy,
+			state,
+			theme: idTheme,
+			clock: scheduler,
+			getEditorText: () => "",
+		});
+
+		widget.dispose();
+		widget.dispose();
+		expect(host.subscriberCount).toBe(0);
 	});
 });

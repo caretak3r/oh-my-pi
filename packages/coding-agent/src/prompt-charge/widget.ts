@@ -43,7 +43,11 @@ export function renderPromptChargeRow(
 	theme: PromptChargeTheme,
 	tier: "full" | "subtle",
 ): string {
-	const fraction = displayedFraction(snapshot, now);
+	const rawFraction = displayedFraction(snapshot, now);
+	// `chargeBucket`/`filledCells` already treat NaN as the safe idle default; the
+	// percentage text below has no array/bucket lookup to fall back through, so it
+	// needs its own guard against rendering a literal "NaN%".
+	const fraction = Number.isNaN(rawFraction) ? 0 : rawFraction;
 	const color = CHARGE_BUCKET_COLOR[chargeBucket(fraction)];
 	const filled = filledCells(fraction);
 	const bar = "▰".repeat(filled) + "▱".repeat(BAR_CELLS - filled);

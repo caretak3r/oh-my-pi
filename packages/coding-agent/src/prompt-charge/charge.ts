@@ -31,7 +31,7 @@ export const BAR_CELLS = 10;
  * in `chars`.
  */
 export function chargeFraction(chars: number, tau: number = CHARGE_TAU_CHARS): number {
-	if (chars <= 0) return 0;
+	if (Number.isNaN(chars) || chars <= 0) return 0;
 	return 1 - Math.exp(-chars / tau);
 }
 
@@ -46,6 +46,7 @@ export function releaseProgress(
 	duration: number = RELEASE_DURATION_MS,
 ): number {
 	const elapsed = elapsedMs - releaseStartMs;
+	if (Number.isNaN(elapsed)) return 0;
 	if (elapsed <= 0) return 0;
 	if (elapsed >= duration) return 1;
 	return elapsed / duration;
@@ -57,14 +58,14 @@ export function releaseProgress(
  * `progress` climbs to `1`. Pure.
  */
 export function releaseIntensity(chargeAtRelease: number, progress: number): number {
-	const clamped = progress <= 0 ? 0 : progress >= 1 ? 1 : progress;
+	const clamped = Number.isNaN(progress) || progress >= 1 ? 1 : progress <= 0 ? 0 : progress;
 	const decay = (1 - clamped) ** 2;
 	return chargeAtRelease * decay;
 }
 
 /** A charge fraction (or release intensity) -> filled bar cells out of `cells`. Pure, rounds to the nearest cell, clamps to `[0, cells]`. */
 export function filledCells(fraction: number, cells: number = BAR_CELLS): number {
-	const clamped = fraction <= 0 ? 0 : fraction >= 1 ? 1 : fraction;
+	const clamped = Number.isNaN(fraction) ? 0 : fraction <= 0 ? 0 : fraction >= 1 ? 1 : fraction;
 	return Math.round(clamped * cells);
 }
 
@@ -79,7 +80,7 @@ const BUCKET_CEILINGS: ReadonlyArray<{ bucket: Exclude<ChargeBucket, "idle">; ma
 
 /** Classify a charge fraction into a {@link ChargeBucket}. Pure, monotonic in `fraction`. */
 export function chargeBucket(fraction: number): ChargeBucket {
-	if (fraction <= 0) return "idle";
+	if (Number.isNaN(fraction) || fraction <= 0) return "idle";
 	for (const { bucket, max } of BUCKET_CEILINGS) {
 		if (fraction <= max) return bucket;
 	}

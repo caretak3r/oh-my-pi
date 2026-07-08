@@ -1163,9 +1163,9 @@ next to the `./model-weather-vane/*` cluster.
 
 None. All fifteen ideas from `IDEA_WIZARD_IDEAS_WAVE2.md` (top 5 + next 10)
 are now implemented, each as its own atomic commit with behavioral tests, a
-green `bun check`, and a filed+closed bead. Remaining work per the run's
-stop condition: an edge-case hardening pass over every earlier feature, and
-an integration/gallery demo if feasible.
+green `bun check`, and a filed+closed bead. All fifteen have also completed
+their edge-case hardening pass. Remaining work per the run's stop
+condition: an integration/gallery demo if feasible.
 
 ## Hardening pass
 
@@ -1192,7 +1192,7 @@ the pass is resumable across iterations.
 | 12 | Cadence Equalizer | ✅ done | oh-my-pi-9md |
 | 13 | Goal Horizon | ✅ done | oh-my-pi-xk9 |
 | 14 | Model Weather Vane | ✅ done | oh-my-pi-bgp |
-| 15 | Prompt Charge | ⬜ pending | — |
+| 15 | Prompt Charge | ✅ done | oh-my-pi-n8e |
 
 ### 1. Tool Constellation — hardening notes
 
@@ -2143,6 +2143,110 @@ established since Agent Fleet.
 13 of 15 features now hardened; only Prompt Charge (feature #15) remains,
 plus the integration/gallery demo.
 
-`bun test packages/coding-agent/test/goal-horizon.test.ts`: 44 pass,
+`bun test packages/coding-agent/test/model-weather-vane.test.ts`: 45 pass,
+0 fail. Root `bun check` green across all workspaces (no fix needed this
+pass). Bead: oh-my-pi-bgp.
+
+### 15. Prompt Charge — hardening notes
+
+Added 25 edge-case behavioral tests to
+`packages/coding-agent/test/prompt-charge.test.ts` (56 total, up from 31),
+covering `charge.ts`'s pure math under adversarial `NaN`/`Infinity` inputs
+(`chargeFraction`, `releaseProgress`, `releaseIntensity`, `filledCells`,
+`chargeBucket`), rendering-level "never renders literal `NaN%`/`undefined`"
+checks under directly-injected `NaN` `chargeAtRelease`/`releaseStartAt`
+snapshot fields and a `NaN` widget-clock reading, `PromptChargeState`
+backward-clock-skew and zero-length-burst edge cases, and controller/widget
+dispose/remount idempotency (pre-mount dispose no-op, double dispose for
+both animated and static mounts, `onInput` after dispose remounting
+cleanly, widget double-dispose). Also hoisted the `recordingContext()` test
+helper from inside the `"prompt charge controller"` describe block to
+module scope, matching the pattern established since Agent Fleet.
+
+- **Two real bugs found and fixed — a genuinely new-shaped instance of the
+  "own clamp guard using `<=`/`>=` leaves `NaN` unclamped" bug class** first
+  identified in Cadence Equalizer's `stepPeak` and Model Weather Vane's
+  `spinDisplayIndex`. Prompt Charge has no fraction-indexed glyph array (its
+  only glyph is the fixed `"⚡"` constant, and the bar is built by
+  `"▰".repeat(n)`/`"▱".repeat(n)`, not array indexing), so the ten prior
+  "`GLYPHS[fractionIndex]` missing `?? GLYPHS[0]`" occurrences don't apply
+  here — but the same "`<=`/`>=` don't catch `NaN`" shape showed up in five
+  different pure functions in `charge.ts`, each fixed with an explicit
+  `Number.isNaN(x)` guard placed *before* the existing `<=`/`>=` clamp so
+  the correct `+Infinity`/`-Infinity` boundary behavior already covered by
+  those comparisons stays exactly as it was (only `NaN` newly resolves to
+  the safe default): `chargeFraction`, `releaseProgress`, `releaseIntensity`,
+  `filledCells`, and `chargeBucket`. The **first** bug's consequences were
+  novel per function rather than a single repeated "undefined" symptom:
+  `filledCells(NaN)` fed a `NaN` cell count into **both**
+  `"▰".repeat(filled)` and `"▱".repeat(BAR_CELLS - filled)` — since
+  `String.prototype.repeat` coerces a `NaN` count to `0` (not `1` or a
+  thrown `RangeError`), the entire bar collapsed to an **empty string**
+  rather than either the expected idle bar or a corrupted-but-nonempty one,
+  a materially different corruption shape than any prior feature's
+  "single undefined glyph" finding; `chargeBucket(NaN)` fell through every
+  `<=` ceiling comparison (all `false` for `NaN`) to return `"full"` — the
+  *hottest*, most-alarming color bucket — for a value that should read as
+  idle, backwards from every other clamp helper's "non-finite defaults to
+  safe/idle" convention established across this run. The **second** bug was
+  found by tracing the fix through to the actual render output rather than
+  stopping at the pure-math layer: even after fixing the five functions
+  above, `renderPromptChargeRow`'s own inline `` `${Math.round(fraction *
+  100)}%` `` percentage text had no guard of its own — a `NaN` `fraction`
+  (reachable only if `PromptChargeState.release()`'s unvalidated
+  `chargeAtRelease` parameter were ever fed `NaN` directly, poisoning
+  `Math.max(live, burst)` since `Math.max` with any `NaN` argument is always
+  `NaN` regardless of the other argument or position) still rendered the
+  literal string `"NaN%"` — confirmed by a failing repro *before* the fix
+  (`state.release(NaN, 100)` → `renderPromptChargeRow` → `"⚡ ▱▱▱▱▱▱▱▱▱▱
+  NaN%"`) and fixed by clamping `fraction` to `0` at the top of the function
+  when `Number.isNaN`. This is the first hardening-pass finding in the run
+  where the bug lived in a render function's own inline computation rather
+  than in a reused pure-math helper.
+- **`PromptChargeState.release()` shares the same unvalidated-clock/value-
+  at-record-time gap as Cost Candle/Memory Crystals/Diff Bloom/Goal
+  Horizon/Model Weather Vane's record methods**, but is the *first*
+  occurrence of this gap covering **two** unvalidated parameters at once
+  (`chargeAtRelease` *and* `now`), unlike every prior feature's single
+  unvalidated clock reading — because Prompt Charge's own polled-input path
+  (`sampleEditorLength`) already has a `Number.isFinite` guard (pre-existing,
+  not added by this pass), `release()` is the *only* unguarded entry point
+  into this feature's state, making it the sole place both bugs above were
+  reachable through. Not reachable via the real controller (`onInput`
+  always calls `this.#state.release(chargeFraction(event.text.length),
+  this.#scheduler.now())`, and `event.text.length` is always a valid
+  non-negative integer while `DEFAULT_FRAME_SCHEDULER.now()` is always
+  finite, per the fact established in Context Constellation's hardening
+  pass) — fixed anyway per this run's "latent, still worth fixing since the
+  functions are exported and pure/free to fix" convention, and because the
+  render-layer fix specifically demonstrates the pipeline degrades safely
+  even under direct state misuse, not just under the constrained inputs the
+  real controller happens to produce.
+- **`releaseProgress`/`filledCells`'s existing `<=`/`>=` boundary checks for
+  `+Infinity`/`-Infinity` were correct all along and are unchanged** — the
+  fix targets *only* `NaN` (via an explicit `Number.isNaN` branch placed
+  before the existing comparisons, not a broader `!Number.isFinite`
+  replacement) precisely because `+Infinity` needs to resolve to `1`
+  (fully released / fully filled) and `-Infinity` to `0`, both of which the
+  pre-existing `<=`/`>=` comparisons already handled correctly — replacing
+  them with a blanket `!Number.isFinite` guard (the pattern used in some
+  earlier features' `sampleEditorLength`-style input clamps) would have
+  incorrectly collapsed `+Infinity` to `0` too, a regression this pass's
+  tests explicitly lock in against (`releaseProgress(Infinity, 0) === 1`,
+  `filledCells(Infinity) === BAR_CELLS`).
+- **`renderPromptChargeOffText` needed no fix**: its own `pct > 0` gate is
+  `false` for a `NaN` `pct` (`Math.round(NaN * 100)`), so a `NaN`
+  `chargeAtRelease` already falls through to the `"⚡ idle"` branch without
+  any explicit `NaN` guard — the off-tier (no-animation-frame) renderer
+  turned out to be the one place in this feature where an existing
+  comparison-as-gate already provided the "`<`-comparison gate is the
+  load-bearing reason `NaN` degrades safely" protection Model Weather
+  Vane's hardening pass flagged as worth checking on this feature.
+
+All 15 features from `IDEA_WIZARD_IDEAS_WAVE2.md` are now hardened. The
+only remaining item under the run's stop condition is the
+integration/gallery demo.
+
+`bun test packages/coding-agent/test/prompt-charge.test.ts`: 56 pass,
 0 fail. Root `bun check` green across all workspaces after the fix.
-Bead: oh-my-pi-xk9.
+Bead: oh-my-pi-n8e.
