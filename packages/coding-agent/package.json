@@ -139,6 +139,14 @@
       "types": "./src/autoresearch/tools/*.ts",
       "import": "./src/autoresearch/tools/*.ts"
     },
+    "./breathing-border": {
+      "types": "./src/breathing-border/index.ts",
+      "import": "./src/breathing-border/index.ts"
+    },
+    "./breathing-border/*": {
+      "types": "./src/breathing-border/*.ts",
+      "import": "./src/breathing-border/*.ts"
+    },
     "./capability": {
       "types": "./src/capability/index.ts",
       "import": "./src/capability/index.ts"

@@ -231,8 +231,83 @@ the bead — documented per the "verify each grounding signal is real" rule):**
 
 ## 5. 🫧 Breathing Border (oh-my-pi-t7f)
 
-**Status:** not started.
+**Status:** done.
+
+**Module:** `packages/coding-agent/src/breathing-border/` (`breath.ts`,
+`state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createBreathingBorderExtension` pushed as an inline extension in
+`sdk.ts` (`createAgentSession`), subscribed to `agent_start` / `agent_end` /
+`turn_start` / `turn_end`. Reuses the existing shared `animations` setting;
+no new settings-schema entries.
+
+**Test command:** `bun test packages/coding-agent/test/breathing-border.test.ts`
+— 34 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- There is no real "editor frame border" hook in the extension surface — only
+  `aboveEditor`/`belowEditor` widget placement exists (`WidgetPlacement` in
+  `extensibility/extensions/types.ts`). The feature is approximated as a
+  single-row `aboveEditor` widget drawing a full-width border-style line,
+  matching the placement pattern every other Wave 2 widget already uses.
+  Flagged as a scoped interpretation, not a literal terminal-chrome border.
+- The bead's "a faint luminance pulse travels the border" is interpreted as:
+  a resting dim border line (`─`, `borderMuted`) with a single brighter glyph
+  that travels one lap per breath cycle, reusing the *same* envelope function
+  for both the glyph's brightness and its lap position (`breathEnvelope`
+  peaks mid-cycle, and the lap position is driven by the identical phase
+  fraction) — so the pulse fades in from one end, peaks brightest mid-lap,
+  and fades out by the far end, rather than a constant-brightness dot. This
+  keeps one pure function driving both axes instead of inventing a second,
+  independent position curve.
+- `subtle` tier: only the two corner glyphs (row's first/last cell) carry the
+  breathing brightness token; the middle span is always the flat `borderMuted`
+  resting character. This holds during both the continuous `active` breathing
+  and the `exhaling` wind-down — `subtle` never renders a traveling pulse.
+- The wind-down exhale (`exhaleEnvelope`) is a fixed 1->0 cosine decay over a
+  constant `EXHALE_DURATION_MS`, independent of the breath phase at the exact
+  moment `agent_end` fires (no continuity splice with the in-progress
+  inhale/exhale). "One slow exhale" reads as a predictable, always-the-same
+  wind-down rather than a phase-continuous fade — simpler and fully
+  deterministic, at the cost of a potential small visual "snap" to the decay
+  curve's start. Flagged as a known simplification.
+- `turn_start`/`turn_end` modulate the breath period from the just-finished
+  turn's wall-clock duration (`breathPeriodMsForTurnDuration`, clamped between
+  `MIN_BREATH_PERIOD_MS` and `MAX_BREATH_PERIOD_MS`) — both events are
+  measured against the injected clock (`FrameScheduler.now()`), not the raw
+  event payload's own `timestamp` field (`turn_start.timestamp` is
+  epoch/wall-clock-based while the shared clock used everywhere else in this
+  kit is relative-monotonic; mixing the two would reintroduce the same
+  dual-clock skew documented for Token Tide). `turn_end` carries no timestamp
+  field at all, so this is the only viable measurement anyway.
+- **Backpressure is wired for real this time**, unlike every prior Wave 2
+  feature (all of which left `backpressureFromTui` unwired as a documented
+  limitation): this bead's headline acceptance criterion is "must freeze
+  instantly on backpressure," so `MotionPolicy.setEnvironment(...,
+  backpressure: backpressureFromTui(tui))` is called once the widget factory
+  receives the real `tui`, and the widget's own `onFrame` calls
+  `policy.refresh()` every tick to re-resolve the tier from the live signal.
+  A sustained-pressure frame flips the tier to `off`, which the shared
+  `AnimatedWidget` base already turns into an immediate host-unsubscribe +
+  forced repaint (no lingering animation) — this reuses existing kit
+  plumbing (`MotionPolicy`'s backpressure hard-gate) rather than the
+  alternate lower-level `AnimationHost`-owned `backpressure` frame-skip
+  option, which would have required deferring host construction into the
+  widget factory (the host is otherwise created synchronously in
+  `#mountWidget`, before `tui` is available).
+- Unlike the other four features (whose animated mount is permanent for the
+  extension's lifetime once first created), Breathing Border tears itself
+  back down to a fully static widget once the post-`agent_end` exhale
+  settles into `idle` — disposing the `AnimationHost` outright rather than
+  just leaving it idling — so a fully idle session really does carry zero
+  frame-clock subscriptions (per the bead's own acceptance test), not just an
+  animated widget whose rows stopped changing. A later `agent_start` builds a
+  fresh `MotionPolicy`/`AnimationHost`/widget from scratch.
 
 ## Next 10 ideas
 
-Not started — begin after all five Wave 2 features are green.
+Not started for any idea yet. All five ranked Wave 2 features are now
+implemented, tested, and green — next iterations begin exploring
+`IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" ranked ideas.
