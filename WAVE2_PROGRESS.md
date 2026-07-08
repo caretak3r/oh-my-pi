@@ -573,8 +573,92 @@ claims a `"memory-crystals"` widget key). Reuses the existing shared
   construction (same structural mount-sequence limitation documented
   throughout this file).
 
+## 10. ✨ Context Constellation (oh-my-pi-8q7)
+
+**Status:** done.
+
+**Grounding:** the idea doc doesn't name a concrete field, only "context
+window as a night sky filling with stars; compaction = a shooting-star
+sweep." Verified the only reliable source for fill state is
+`ExtensionContext.getContextUsage()` (`extensibility/extensions/types.ts:280-296`
+— `{tokens, contextWindow, percent, compactionThresholdTokens?, tokensUntilCompaction?}`);
+the `"context"` event itself (`ContextEvent`, fired before every LLM call)
+carries only `messages`, no usage figures, so the controller polls
+`ctx.getContextUsage()` at that event boundary rather than trusting the
+event payload. Sweep geometry is stamped from `auto_compaction_start`
+(`reason`/`action` — always populated) as the pre-compaction cell count;
+`auto_compaction_end` triggers an *immediate* re-read of
+`getContextUsage()` for the sweep's target rather than depending on
+`AutoCompactionEndEvent.result`, which — per Memory Crystals' controller
+note — is `undefined` on every `handoff`/`shake`/aborted/skipped path. An
+aborted/skipped compaction therefore renders no sweep motion at all (target
+== start), which is correct: nothing was actually reclaimed. The pre-existing
+`context-weather` feature this idea calls "a cousin of" lives only on the
+separate, unmerged `feat/context-weather` branch — not present in this
+branch's working tree (same situation as Memory Crystals/`compaction-vacuum`)
+— confirmed via research to be a 1-row scalar barometer/tide gauge (not a
+multi-cell spatial field), so Context Constellation is structurally distinct
+even though both ultimately read the same `getContextUsage()` signal.
+
+**Module:** `packages/coding-agent/src/context-constellation/` (`sky.ts`,
+`state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createContextConstellationExtension` pushed as a tenth inline
+extension in `sdk.ts` (`createAgentSession`), subscribed to `context`,
+`auto_compaction_start`, and `auto_compaction_end`. Widget placed
+`belowEditor` (balances the aboveEditor/belowEditor split to 5/5). Reuses
+the existing shared `animations` setting; no new settings-schema entries.
+New `./context-constellation` and `./context-constellation/*` package.json
+export paths.
+
+**Test command:** `bun test packages/coding-agent/test/context-constellation.test.ts`
+— 28 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- A fixed 10x2 (20-cell) grid, 5% of the context window per cell. Cells
+  light up in a fixed pseudo-random scatter order (`FILL_ORDER`, a
+  deterministic FNV-1a-sorted permutation of `[0, 20)` computed once at
+  module load) rather than left-to-right, so growth reads as a filling sky
+  rather than a progress bar — same hash-driven-layout rationale as Tool
+  Constellation's `hashCell`/`assignCell`.
+- Star color is a function of `getContextUsageLevel`/`getContextUsageThemeColor`
+  from the existing `modes/components/status-line/context-thresholds.ts` —
+  reused verbatim, not reinvented, per the established "reuse the theme /
+  reuse the signal, don't invent a parallel one" rule (same precedent as
+  Token Tide reusing `calculateTokensPerSecond`). Off-tier text reuses
+  `formatContextUsage` from the same module for an identical readout to the
+  footer's context-usage line.
+- The newest-lit star briefly flares (`growFlareIntensity`, an exhale shape
+  mirroring Memory Crystals' `sparkleIntensity`) before settling to its
+  plain resting glyph; the `subtle` tier skips this entirely, matching every
+  prior feature's "subtle ignores the transient disturbance" convention.
+- The sweep is a comet-front wipe: `ConstellationState.beginSweep` stamps
+  the pre-compaction cell count as `from`, and the next `applyContextUsage`
+  call (from the immediate post-`auto_compaction_end` re-read) sets `to`.
+  The widget interpolates between them via `sweepProgress`/`lerpCells` over
+  `SWEEP_DURATION_MS` (900ms); once elapsed exceeds that window the sweep
+  record is never explicitly cleared (mirroring `lastFired` in Tool
+  Constellation) — the renderer simply falls back to the plain ground-truth
+  `filledCells` once its own elapsed-since-`startedAt` check expires, so a
+  stale sweep record can never re-trigger a comet later.
+- Like every prior Wave 2 feature, the controller pulls a fresh reading
+  directly from `ctx.getContextUsage()` inside each handler rather than
+  trusting any event payload to carry it — the same "pull, don't trust the
+  push" pattern Session Bonsai established for `ctx.sessionManager.getTree()`.
+- Same dual-clock-seam pattern as every other Wave 2 feature: the controller
+  stamps `applyContextUsage`/`beginSweep` against the shared `FrameScheduler`'s
+  relative clock, and the widget reads that same injected clock for
+  flare/sweep decay math (not the host's own mount-relative `elapsedMs`).
+- Like every Wave 2 feature except Breathing Border, this mount is permanent
+  for the extension's lifetime once first created —
+  `backpressureFromTui(tui)` is not wired into the `AnimationHost`
+  construction (same structural mount-sequence limitation documented
+  throughout this file).
+
 ## Ideas not yet started
 
-Ideas 10–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Context
-Constellation, Diff Bloom, Cadence Equalizer, Goal Horizon, Model Weather
+Ideas 11–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Diff Bloom,
+Cadence Equalizer, Goal Horizon, Model Weather
 Vane, Prompt Charge) remain unstarted.

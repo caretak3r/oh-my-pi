@@ -259,6 +259,14 @@
       "types": "./src/config/*.ts",
       "import": "./src/config/*.ts"
     },
+    "./context-constellation": {
+      "types": "./src/context-constellation/index.ts",
+      "import": "./src/context-constellation/index.ts"
+    },
+    "./context-constellation/*": {
+      "types": "./src/context-constellation/*.ts",
+      "import": "./src/context-constellation/*.ts"
+    },
     "./dap": {
       "types": "./src/dap/index.ts",
       "import": "./src/dap/index.ts"
