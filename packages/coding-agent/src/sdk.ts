@@ -1851,6 +1851,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		inlineExtensions.push((await import("./reflection-ripple")).createReflectionRippleExtension);
 		inlineExtensions.push((await import("./memory-crystals")).createMemoryCrystalsExtension);
 		inlineExtensions.push((await import("./context-constellation")).createContextConstellationExtension);
+		inlineExtensions.push((await import("./diff-bloom")).createDiffBloomExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}

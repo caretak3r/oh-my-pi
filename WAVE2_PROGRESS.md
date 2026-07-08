@@ -657,8 +657,121 @@ export paths.
   construction (same structural mount-sequence limitation documented
   throughout this file).
 
+## 11. 🌸 Diff Bloom (oh-my-pi-dt7)
+
+**Status:** done.
+
+**Grounding:** the idea doc says "Edit/Write results bloom green (added) /
+wither red (removed) with a wipe. Grounded in `tool_result` of edit tools."
+Verified the `edit` tool is the only builtin whose `tool_result` carries a
+real, always-populated diff: `EditToolDetails.diff` (`edit/renderer.ts:79-104`)
+is a required `string` field (not optional), present for both single-file
+and multi-file edits (multi-file diffs are the per-file diffs concatenated —
+confirmed in `edit/index.ts`'s `executeMultiPathEntries`). Added/removed line
+counts are parsed with `getDiffStats` (`tools/render-utils.ts:491`), the same
+helper the TUI's own tool-result renderer uses
+(`edit/renderer.ts`'s `formatDiffStatsSuffix`) — reused verbatim rather than
+reinventing a parallel line-counter, per the established "reuse the signal,
+don't invent a parallel one" rule. This codebase's internal diff format uses
+numbered `+N|`/`-N|`/` N|` line prefixes (`edit/diff.ts`'s
+`formatNumberedDiffLine`) with no `---`/`+++` file-header lines, so
+`getDiffStats`'s naive "count lines starting with +/-" approach has no
+header-contamination risk here (verified by reading `generateDiffString`/
+`generateUnifiedDiffString`). A thrown-error edit always carries
+`details: undefined` (`extensions/wrapper.ts`'s catch branch sets
+`details: undefined as TDetails` before emitting `tool_result`), so gating on
+"is `details?.diff` a non-empty string" is sufficient — no separate
+`isError` check is needed, and a partial-failure multi-file edit still
+blooms for whatever real diff was actually applied before the failure.
+**`write` tool results are deliberately NOT wired**: `WriteToolResultEvent.details`
+is typed `undefined` on the extension-facing event (`extensibility/extensions/types.ts:773-776`)
+— the only content extensions see for a write is a human-readable
+"Successfully wrote N bytes to path" string, and regex-parsing that would be
+exactly the kind of invented field prior Wave 2 features scoped away from
+(Memory Crystals dropped the "messages compacted" dimension for the same
+reason). Diff Bloom therefore ships as an edit-only feature, a narrower
+scope than the idea doc's "Edit/Write" framing, documented here rather than
+silently reinterpreted.
+
+**Module:** `packages/coding-agent/src/diff-bloom/` (`bloom.ts`, `state.ts`,
+`widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createDiffBloomExtension` pushed as an eleventh inline
+extension in `sdk.ts` (`createAgentSession`), subscribed to `tool_result`
+and filtered to `toolName === "edit"` via a new `isToolResultEventType`
+type guard (see below). Widget placed `aboveEditor` (balances the
+aboveEditor/belowEditor split to 6/5 — the tied 5/5 split left either side
+equally valid, and Diff Bloom's ephemeral single-flash shape matches the
+aboveEditor cluster's existing ripple/candle-style features more than the
+belowEditor cluster's persistent trays/maps). Reuses the existing shared
+`animations` setting; no new settings-schema entries. New `./diff-bloom` and
+`./diff-bloom/*` package.json export paths.
+
+**Infra addition:** added `isToolResultEventType` to
+`extensibility/extensions/types.ts`, a `tool_result` counterpart to the
+existing `isToolCallEventType` guard. Direct narrowing via
+`event.toolName === "edit"` does not narrow `event.details` away from the
+custom-tool `unknown` case, because `CustomToolResultEvent.toolName` is
+typed `string` (not a literal), which overlaps with every builtin literal
+from TypeScript's perspective — the exact issue `isToolCallEventType`'s own
+doc comment already called out for the `tool_call` side. This is
+general-purpose extension infrastructure, not diff-bloom-specific, and any
+future `tool_result`-grounded feature narrowing to a builtin tool will need
+the same guard.
+
+**Test command:** `bun test packages/coding-agent/test/diff-bloom.test.ts`
+— 35 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- A single active bloom, mirroring Reflection Ripple: a fresh edit replaces
+  any still-blooming one rather than queuing a backlog — a burst of rapid
+  edits reads as one continuously-refreshed flower, not overlapping ghosts.
+- The row splits into two segments: added cells grow inward from the left
+  edge toward center (green, `toolDiffAdded` theme token), removed cells
+  grow inward from the right edge toward center (red, `toolDiffRemoved`
+  theme token) — both existing, already-themed tokens reused verbatim
+  (`modes/theme/theme.ts:1044-1045`), not new colors. Cell count per segment
+  is `lines / MAX_REFERENCE_LINES` (a fixed 40-line ceiling, same
+  fixed-reference-not-adaptive-max convention as Memory Crystals'
+  `MAX_REFERENCE_TOKENS`/Cost Candle's `WAX_REFERENCE_COST_USD`) times the
+  segment width times the current bloom intensity.
+- `bloomIntensity` is a grow-then-wipe envelope: eases up to full intensity
+  by `BLOOM_GROW_MS` (400ms, `sqrt` ease-out like Reflection Ripple's
+  wavefront — "the flower opening"), then wipes linearly back to `0` by
+  `BLOOM_DURATION_MS` (1400ms total) — the row clearing. This is the one
+  Wave 2 envelope shape that grows in before decaying, rather than peaking
+  instantly like every prior feature's "exhale" shapes (`reflectDimAmount`,
+  Memory Crystals' `sparkleIntensity`, Context Constellation's
+  `growFlareIntensity`) — chosen because "bloom" specifically implies
+  opening, not an instant flash.
+- Cell glyph brightness rides the same `bloomIntensity` ramp
+  (`BLOOM_GLYPHS`, a `" "`→`"█"` ramp mirroring Reflection Ripple's
+  `RING_GLYPHS`), so all filled cells pulse in brightness together while the
+  filled *count* stays fixed for the bloom's lifetime (set once at trigger
+  time from the diff stats, not recomputed per frame).
+- `subtle` tier collapses to a single centered glyph colored by whichever
+  side (added/removed) has more lines — same "collapse to one dominant
+  signal" convention as Reflection Ripple's subtle tier.
+- Like Tool Constellation/Cost Candle/Memory Crystals, the widget mounts
+  lazily on the first real signal (the first edit with a non-empty,
+  non-zero diff) rather than pre-mounting an empty row.
+- Off-tier fallback: `"🌸 path +A/-R"`, matching Reflection Ripple's
+  `"↺ reflecting: rule"` / Memory Crystals' `"◆ N crystal(s) · ..."`
+  static-line convention; falls back to `"no edits yet"` before any bloom.
+- Same dual-clock-seam pattern as every other Wave 2 feature: the controller
+  stamps `applyBloom` against the shared `FrameScheduler`'s relative clock,
+  and the widget reads that same injected clock for intensity/glyph math
+  (not the host's own mount-relative `elapsedMs`).
+- Like every prior Wave 2 feature except Breathing Border, this mount is
+  permanent for the extension's lifetime once first created —
+  `backpressureFromTui(tui)` is not wired into the `AnimationHost`
+  construction (same structural mount-sequence limitation documented
+  throughout this file).
+
 ## Ideas not yet started
 
-Ideas 11–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Diff Bloom,
-Cadence Equalizer, Goal Horizon, Model Weather
-Vane, Prompt Charge) remain unstarted.
+Ideas 12–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Cadence
+Equalizer, Goal Horizon, Model Weather Vane, Prompt Charge) remain
+unstarted.

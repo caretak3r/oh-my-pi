@@ -283,6 +283,14 @@
       "types": "./src/debug/*.ts",
       "import": "./src/debug/*.ts"
     },
+    "./diff-bloom": {
+      "types": "./src/diff-bloom/index.ts",
+      "import": "./src/diff-bloom/index.ts"
+    },
+    "./diff-bloom/*": {
+      "types": "./src/diff-bloom/*.ts",
+      "import": "./src/diff-bloom/*.ts"
+    },
     "./discovery": {
       "types": "./src/discovery/index.ts",
       "import": "./src/discovery/index.ts"
