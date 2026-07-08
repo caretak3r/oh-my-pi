@@ -1180,7 +1180,7 @@ the pass is resumable across iterations.
 |---|---|---|---|
 | 1 | Tool Constellation | ✅ done | oh-my-pi-rxf |
 | 2 | Token Tide | ✅ done | oh-my-pi-aqe |
-| 3 | Session Bonsai | ⬜ pending | — |
+| 3 | Session Bonsai | ✅ done | oh-my-pi-cxn |
 | 4 | Todo Meteors | ⬜ pending | — |
 | 5 | Breathing Border | ⬜ pending | — |
 | 6 | Agent Fleet | ⬜ pending | — |
@@ -1285,4 +1285,69 @@ No behavior changes were needed — every edge case degrades gracefully by
 design; the `waveGlyph(NaN)` and Infinity-bucket findings were genuine
 "the intuitive answer is wrong" surprises worth documenting, not bugs.
 `bun test packages/coding-agent/test/token-tide.test.ts`: 38 pass, 0 fail.
+
+### 3. Session Bonsai — hardening notes
+
+Added 15 edge-case behavioral tests to
+`packages/coding-agent/test/session-bonsai.test.ts` (45 total, up from 30),
+covering `tree.ts`'s pure collapsing/pruning, `growth.ts`'s glyph/unfurl
+math, `BonsaiState`'s spawn-timestamp bookkeeping, `renderBonsaiTree`, and
+the controller's dispose lifecycle:
+
+- **Real bug found and fixed**: `budGlyph` (unlike Token Tide's
+  `waveGlyph`, which already has `?? WAVE_GLYPHS[0]`) had no fallback for
+  a `NaN` growth fraction — `BUD_GLYPHS[NaN]` is `undefined`, and template
+  interpolation in `nodeGlyph`/`renderBonsaiTree` would have rendered the
+  literal string `"undefined"` into a tree line instead of degrading to a
+  blank glyph. Confirmed via a standalone repro before touching source.
+  Fixed with the same `?? BUD_GLYPHS[0]` pattern `waveGlyph` already uses;
+  a new rendering test (`renderBonsaiTree` at a `NaN` elapsed clock
+  reading) locks in that no row ever contains the substring `"undefined"`.
+  `growth` being `NaN` is not reachable via any real event path today
+  (spawn timestamps and the shared scheduler's `now()` are always finite
+  numbers) but the fix costs nothing and matches established convention.
+- **Empty roots / unknown active leaf**: `buildBonsaiTree([], id)` returns
+  `[]` (not a throw), and an `activeLeafId` that matches no raw node in
+  the tree at all marks nothing active (same graceful-miss shape as
+  `activeLeafRank`'s already-tested `0`-return case, now also covered on
+  the `isActive`-marking path).
+- **Root that fully collapses**: a root with a single linear child chain
+  down to one leaf collapses away entirely — `collapseChain` walks straight
+  through the root object itself, so the surviving `BonsaiNode`'s `id` is
+  the leaf's id, never the original root's id. Worth remembering for any
+  future code that assumes a bonsai tree's top-level node id traces back
+  to a real root entry.
+- **Backward clock skew, two shapes**: (1) `unfurlGrowth` clamps to `0`
+  for any `elapsedMs` at or before `spawnAtMs`, including deeply negative
+  deltas, and returns `NaN` (not a thrown error) for non-finite inputs on
+  either side; (2) `BonsaiState.update` never rewrites an already-recorded
+  `spawnAt` entry even if a later `update` call is fed an earlier clock
+  reading — spawn timestamps are stamped once, permanently, the same
+  "pull-vs-push consistency" invariant Context Constellation's grounding
+  notes established for its own scheduler reads.
+- **Stale `spawnAt` retention**: once a raw tree node's compact-tree
+  representative id (e.g. a collapsed leaf) is observed, it stays in
+  `#spawnAt` forever even after that node is pruned from every subsequent
+  raw tree snapshot — `BonsaiState` is append-only with no GC. Not a bug
+  (matches the class's own doc comment framing of "record a spawn
+  timestamp the first time any node id is observed"), but a real unbounded-
+  growth tradeoff worth flagging: a session with heavy branch churn over a
+  very long run will accumulate dead ids in this map for the process
+  lifetime. Not fixed — no observed session length makes this material,
+  and pruning would need a "still reachable" pass on every `update` that
+  the controller doesn't currently need for anything else.
+- **Controller dispose idempotency**: `dispose()` before any mount is a
+  silent no-op (zero `setWidget` calls, matching Tool Constellation's and
+  Token Tide's established pre-mount-guard finding); a second `dispose()`
+  call after a real teardown emits no extra `setWidget(..., undefined)`
+  call; and — a shape not previously tested on any other Wave 2 feature —
+  a session event arriving *after* `dispose()` correctly remounts a fresh
+  widget rather than staying permanently dormant, since `#mount` is reset
+  to `undefined` on teardown and `#handleEvent`'s `if (!this.#mount)`
+  branch treats that indistinguishably from "never mounted".
+
+One real bug found and fixed (`budGlyph(NaN)` → literal `"undefined"` in
+rendered output); every other edge case degraded gracefully by design.
+`bun test packages/coding-agent/test/session-bonsai.test.ts`: 45 pass, 0
+fail. Root `bun run check` green across all workspaces after the fix.
 `bun check`: green.

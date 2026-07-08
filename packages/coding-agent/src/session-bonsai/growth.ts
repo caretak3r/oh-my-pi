@@ -18,7 +18,7 @@ const BUD_GLYPHS = [".", "o", "0"] as const;
 export function budGlyph(growth: number): string {
 	const clamped = growth <= 0 ? 0 : growth >= 1 ? 1 : growth;
 	const index = Math.min(BUD_GLYPHS.length - 1, Math.floor(clamped * BUD_GLYPHS.length));
-	return BUD_GLYPHS[index];
+	return BUD_GLYPHS[index] ?? BUD_GLYPHS[0];
 }
 
 const SHIMMER_PERIOD_MS = 1400;

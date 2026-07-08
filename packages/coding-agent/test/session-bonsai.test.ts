@@ -117,6 +117,26 @@ describe("session bonsai tree collapsing (pure)", () => {
 		expect(activeLeafRank(tree, "nonexistent")).toBe(0);
 		expect(activeLeafRank(tree, null)).toBe(0);
 	});
+
+	it("an empty roots array collapses to an empty tree with no leaves", () => {
+		const tree = buildBonsaiTree([], "anything");
+		expect(tree).toEqual([]);
+		expect(collectLeafIds(tree)).toEqual([]);
+		expect(activeLeafRank(tree, "anything")).toBe(0);
+	});
+
+	it("an activeLeafId that doesn't exist anywhere in roots marks nothing active", () => {
+		const tree = buildBonsaiTree(branchingRawTree(), "nonexistent");
+		expect(tree[0].isActive).toBe(false);
+		expect(tree[0].children.every(c => !c.isActive)).toBe(true);
+	});
+
+	it("a root with a single leaf child and no branch collapses that root away entirely", () => {
+		// root has exactly one child chain down to a leaf; collapseChain walks straight through the root.
+		const tree = buildBonsaiTree([{ id: "root", children: [{ id: "leaf", children: [] }] }], "leaf");
+		expect(tree).toHaveLength(1);
+		expect(tree[0].id).toBe("leaf"); // "root" itself never survives collapsing
+	});
 });
 
 describe("session bonsai pruning (pure)", () => {
@@ -191,6 +211,23 @@ describe("session bonsai growth math (pure)", () => {
 		expect(isShimmering(220)).toBe(false);
 		expect(isShimmering(1400)).toBe(true); // period repeats
 	});
+
+	it("budGlyph falls back to the first glyph rather than 'undefined' for a NaN growth fraction", () => {
+		// NaN satisfies neither the <=0 nor >=1 clamp branches, so it flows through
+		// to a NaN array index -- same class of gotcha as Token Tide's waveGlyph(NaN).
+		expect(budGlyph(Number.NaN)).toBe(".");
+	});
+
+	it("unfurlGrowth returns NaN for a non-finite spawn or elapsed reading, never throwing", () => {
+		expect(unfurlGrowth(Number.NaN, 1000)).toBeNaN();
+		expect(unfurlGrowth(1000, Number.NaN)).toBeNaN();
+		expect(unfurlGrowth(1000, Number.POSITIVE_INFINITY)).toBe(1); // an infinitely-elapsed clock clamps to fully grown
+	});
+
+	it("unfurlGrowth clamps to 0 for elapsed readings before spawn (backward clock skew)", () => {
+		expect(unfurlGrowth(1000, 0)).toBe(0);
+		expect(unfurlGrowth(1000, -5000)).toBe(0);
+	});
 });
 
 describe("session bonsai state", () => {
@@ -227,6 +264,31 @@ describe("session bonsai state", () => {
 		state.update(branchingRawTree(), "C", 0);
 		const changed = state.update(branchingRawTree(), "E", 1000);
 		expect(changed).toBe(true);
+	});
+
+	it("a node id already seen keeps its original spawn time even if the raw tree is re-observed at an earlier clock reading (backward skew)", () => {
+		const state = new BonsaiState();
+		state.update(branchingRawTree(), "C", 5000);
+		const originalSpawn = state.snapshot().spawnAt.get("B");
+		state.update(branchingRawTree(), "C", 100); // clock jumps backward; B already known
+		expect(state.snapshot().spawnAt.get("B")).toBe(originalSpawn); // never overwritten once recorded
+	});
+
+	it("an empty raw tree update reports a change from the initial empty baseline and yields an empty snapshot", () => {
+		const state = new BonsaiState();
+		const changed = state.update([], null, 0);
+		expect(changed).toBe(false); // both tree and active leaf are already empty/null pre-update; nothing changed
+		expect(state.snapshot().tree).toEqual([]);
+		expect(state.snapshot().spawnAt.size).toBe(0);
+	});
+
+	it("re-observing after a leaf's raw node disappears keeps its stale spawn entry (no pruning of dead ids)", () => {
+		const state = new BonsaiState();
+		state.update(branchingRawTree(), "C", 0); // compact tree keeps B (branch) and C/E (leaves; D collapses into E)
+		expect(state.snapshot().spawnAt.has("E")).toBe(true);
+		state.update([{ id: "A", children: [{ id: "C", children: [] }] }], "C", 1000); // the D->E branch is pruned from the raw tree entirely
+		expect(state.snapshot().tree.map(n => n.id)).not.toContain("E");
+		expect(state.snapshot().spawnAt.has("E")).toBe(true); // spawnAt is append-only; documents unbounded growth as a known tradeoff
 	});
 });
 
@@ -275,6 +337,12 @@ describe("session bonsai rendering (pure)", () => {
 	it("falls back to a placeholder when there are no branches yet", () => {
 		const rows = renderBonsaiTree({ tree: [], activeLeafId: null, spawnAt: new Map() }, 0, idTheme, "full");
 		expect(rows[0]).toContain("no branches yet");
+	});
+
+	it("never renders the literal string 'undefined' even with a NaN elapsed clock reading", () => {
+		const tree = buildBonsaiTree(branchingRawTree(), "C");
+		const rows = renderBonsaiTree({ tree, activeLeafId: "C", spawnAt: new Map() }, Number.NaN, idTheme, "full");
+		expect(rows.every(r => !r.includes("undefined"))).toBe(true);
 	});
 });
 
@@ -472,5 +540,39 @@ describe("session bonsai controller", () => {
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
+	});
+
+	it("dispose before any mount is a no-op: no setWidget call, no host to tear down", () => {
+		const controller = new SessionBonsaiController({ scheduler: manualScheduler() });
+		const { ctx, calls } = recordingContext(treeSource(branchingSourceTree(), "C"));
+
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("disposing twice is idempotent: the second call is a silent no-op", () => {
+		const scheduler = manualScheduler();
+		const controller = new SessionBonsaiController({ scheduler });
+		const { ctx, calls } = recordingContext(treeSource(branchingSourceTree(), "C"));
+
+		controller.onSessionBranch(branchEvent, ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(callsAfterFirstDispose); // no extra setWidget(undefined) call
+	});
+
+	it("a session event after dispose remounts a fresh widget rather than staying dormant", () => {
+		const scheduler = manualScheduler();
+		const controller = new SessionBonsaiController({ scheduler });
+		const { ctx, calls } = recordingContext(treeSource(branchingSourceTree(), "C"));
+
+		controller.onSessionBranch(branchEvent, ctx);
+		controller.dispose(ctx);
+		controller.onSessionTree(treeEvent, ctx);
+
+		const lastCall = calls[calls.length - 1];
+		expect(typeof lastCall.content).toBe("function"); // remounted, not left dormant
 	});
 });
