@@ -5,6 +5,7 @@
 ### Added
 
 - Added Tool Constellation, an ambient `belowEditor` widget that renders the session's tool activity as a small night-field: each tool type is a fixed star that flares on `tool_call` and traces a faint ley-line from the previously-used star. Built on the shared `@oh-my-pi/pi-animation` kit; gated by the new `animations` setting (off/subtle/full) with a static per-category tally fallback outside a TTY or under `NO_COLOR`/`CI`.
+- Added Token Tide, an ambient `aboveEditor` oscilloscope widget for live token throughput: a scrolling waveform that reads smooth under steady streaming and jagged under bursty generation, warming from cool teal to hot amber as tok/s climbs, settling to a faintly-pulsing flat line between turns. Samples the existing `tokensPerSecond` provider (`status-line/token-rate.ts`) rather than recomputing it; gated by the shared `animations` setting with a numeric `142 tok/s` static fallback outside a TTY or under `NO_COLOR`/`CI`.
 
 ### Changed
 

@@ -58,7 +58,56 @@ need to reconcile this one schema entry when merged, nothing else overlaps.
 
 ## 2. 〰️ Token Tide (oh-my-pi-i7o)
 
-**Status:** not started.
+**Status:** done.
+
+**Module:** `packages/coding-agent/src/token-tide/` (`scale.ts`, `state.ts`,
+`widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createTokenTideExtension` pushed as an inline extension in
+`sdk.ts` (`createAgentSession`), subscribed to `message_start` /
+`message_update` / `message_end` (the streaming-delta events — `turn_end`
+alone only fires once a turn is fully settled, too coarse for a live
+oscilloscope). Reuses the existing shared `animations` setting; no new
+settings-schema entries.
+
+**Test command:** `bun test packages/coding-agent/test/token-tide.test.ts`
+— 28 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- The bead's grounded signal, `calculateTokensPerSecond` in
+  `status-line/token-rate.ts`, is reused verbatim (not recomputed) by feeding
+  it a single-element array holding just the in-flight assistant message —
+  the function only ever looks at the last assistant message anyway, so the
+  controller doesn't need the full session message history, which
+  `ExtensionContext` doesn't expose to inline extensions in the first place.
+- Two distinct clocks are threaded through this feature, unlike
+  Tool Constellation's single shared clock: the `AnimationHost`'s relative
+  `FrameScheduler` (repaint cadence + the idle resting-pulse phase) and a
+  separate wall-clock (`WallClock`, defaulting to `Date.now`) used only to
+  evaluate `calculateTokensPerSecond` against message `timestamp`s, which are
+  Unix-epoch-based. Conflating the two would either break the pulse's
+  test-determinism or silently miscompute throughput.
+- `message_end` clears the tracked in-flight message rather than leaving its
+  now-fixed duration/usage in place. Once a message finalizes, its computed
+  average rate would otherwise read as a stable non-zero throughput forever
+  (until the next message starts) instead of settling toward the bead's
+  "between turns -> near-flat line" idle state.
+- Amplitude normalizes against a fixed `MAX_REFERENCE_RATE` (160 tok/s)
+  reference ceiling rather than an adaptive/rolling max — simpler and
+  deterministic, at the cost of not auto-scaling to a given model's typical
+  throughput ceiling. Flagged as a known simplification.
+- Rate buckets (idle/low/medium/high/burst) drive both the waveform glyph
+  color and the VU bar color, mapped onto existing `ThemeColor` tokens
+  (`syntaxType` -> `syntaxVariable` -> `syntaxFunction` -> `warning`) per the
+  bead's cool-teal-to-hot-amber palette, same "reuse the theme, don't invent
+  raw ANSI" rule Tool Constellation established.
+- Like `retry-radar` and Tool Constellation, `backpressureFromTui(tui)` is
+  not wired into the `AnimationHost` construction: the shared `tui` handle is
+  only available inside the widget factory callback, after the host already
+  exists. This is a structural property of the shared kit's mount sequence,
+  not a regression specific to this feature.
 
 ## 3. 🌳 Session Bonsai (oh-my-pi-y91)
 

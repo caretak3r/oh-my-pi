@@ -540,6 +540,14 @@
       "types": "./src/task/*.ts",
       "import": "./src/task/*.ts"
     },
+    "./token-tide": {
+      "types": "./src/token-tide/index.ts",
+      "import": "./src/token-tide/index.ts"
+    },
+    "./token-tide/*": {
+      "types": "./src/token-tide/*.ts",
+      "import": "./src/token-tide/*.ts"
+    },
     "./tool-constellation": {
       "types": "./src/tool-constellation/index.ts",
       "import": "./src/tool-constellation/index.ts"
