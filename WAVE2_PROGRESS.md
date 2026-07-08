@@ -1189,7 +1189,7 @@ the pass is resumable across iterations.
 | 9 | Memory Crystals | ✅ done | oh-my-pi-91d |
 | 10 | Context Constellation | ✅ done | oh-my-pi-cag |
 | 11 | Diff Bloom | ✅ done | oh-my-pi-9gm |
-| 12 | Cadence Equalizer | ⬜ pending | — |
+| 12 | Cadence Equalizer | ✅ done | oh-my-pi-9md |
 | 13 | Goal Horizon | ⬜ pending | — |
 | 14 | Model Weather Vane | ⬜ pending | — |
 | 15 | Prompt Charge | ⬜ pending | — |
@@ -1922,3 +1922,90 @@ Root `bun check` green across all workspaces after the fix (pre-existing,
 unrelated failures in `bun test`'s full-suite run — Python runner shell
 streaming, SSH approval gating, etc. — were confirmed present before this
 change and untouched by it). Bead: oh-my-pi-9gm.
+
+### 12. Cadence Equalizer — hardening notes
+
+Added 20 edge-case behavioral tests to
+`packages/coding-agent/test/cadence-equalizer.test.ts` (49 total, up from
+29), covering `bars.ts`'s pure math under adversarial `NaN`/`Infinity`
+inputs, `CadenceEqualizerState` construction/edge cases, rendering with
+directly-injected adversarial band/peak arrays, and controller/widget
+dispose-remount idempotency. Also hoisted the `recordingContext()` test
+helper from inside the `"cadence equalizer controller"` describe block to
+module scope, matching the pattern established in every prior hardening
+pass since Agent Fleet.
+
+- **Real bug found and fixed, a genuinely new shape distinct from all
+  nine prior glyph-ramp occurrences**: `stepPeak` (a peak-hold marker
+  step function documented as "Pure; clamps to `[0, 1]`") returned its
+  raw `Math.max(current, decayed)` result with **no final clamp**. Since
+  `Math.max(x, NaN)` is `NaN` regardless of argument order/position, an
+  adversarial (non-finite) `decayPerFrame` — e.g. `NaN` or `-Infinity`,
+  which flip `decayed` to `NaN`/`Infinity` via subtraction — let the
+  contract-violating value escape unclamped. Unlike the recurring
+  `RAMP[index]` array-lookup bug (features #3–11), this isn't a rendering
+  crash: the peak value only ever feeds a numeric comparison
+  (`peak - amplitude >= PEAK_VISIBLE_GAP`) in the renderer, so an escaped
+  `NaN`/`Infinity` degrades to "no peak cap shown" rather than literal
+  `"undefined"` text — still a real contract violation on an exported
+  pure function, fixed for free by wrapping the return in the module's
+  existing `clamp01`: `return clamp01(Math.max(current, decayed));`.
+  Confirmed unreachable via the real pipeline today (`CadenceEqualizerState`
+  always uses the finite `PEAK_DECAY_PER_FRAME = 0.02` constant unless a
+  test explicitly overrides it via the constructor), matching the
+  established "fix free, document reachability honestly" convention.
+- **Notable discovery while investigating: this module's own `clamp01`
+  helper does not distinguish `+Infinity` from `NaN`** — both hit the
+  `!Number.isFinite(value)` guard and map to `0`, not a sign-aware clamp
+  to the `1` boundary. This means `stepBand`/`stepPeak` fed an infinite
+  target/alpha/decay bottom out at `0` regardless of direction (e.g.
+  `stepBand(0.5, 0.9, Infinity)` — stepping *up* with infinite gain — is
+  `0`, not `1`), which reads unusual for a function named "clamp" but is
+  a deliberate, consistent "any non-finite input is invalid, default to
+  the safe/idle value" policy matching every other clamp helper across
+  the run's hardened features (e.g. Token Tide's `normalizeAmplitude`,
+  Breathing Border's `clamp01`) — documented and locked in with tests
+  rather than "fixed", since redefining `clamp01` to be sign-aware for
+  `Infinity` would be a behavior change with no real caller depending on
+  it (`BAND_ALPHAS`/`PEAK_DECAY_PER_FRAME` are always finite constants).
+- **This is the first feature in the hardening pass whose renderer
+  reuses *already-hardened* primitives rather than its own glyph ramp**:
+  `renderEqualizerRow`/`renderCompactEqualizer` color and glyph bands via
+  Token Tide's `rateBucket`/`waveGlyph` (both already fixed with `??`
+  fallbacks in Token Tide's own hardening pass) and its own
+  `bandColor` wrapper, so directly injecting adversarial `NaN`/`Infinity`
+  bands straight into the render functions (bypassing `CadenceEqualizerState`
+  entirely) still never renders `"undefined"` or `"NaN"` — confirmed by
+  test, and notable as evidence that hardening upstream shared primitives
+  (Token Tide's `scale.ts`) correctly protects every downstream reuser
+  for free.
+- **`CadenceEqualizerState.pushSample`'s existing `Number.isFinite &&
+  > 0` guard already correctly rejects `Infinity`** (not just `NaN`/negative)
+  before it can accumulate — unlike Cost Candle/Memory Crystals/Diff
+  Bloom's `recordMessageCost`/`applyCompactionEnd`/`applyBloom`, this
+  feature has no clock parameter passed into its state mutator at all
+  (`pushSample` takes only a normalized amplitude, already validated one
+  layer up by the already-hardened `normalizeAmplitude`), so it has no
+  analogous "unvalidated clock reading permanently poisons state" gap to
+  find — confirmed by test rather than assumed.
+- **A custom (non-default) `alphas`/`peakDecayPerFrame` constructor
+  option, including an empty `alphas` array (zero bands) and an adversarial
+  `NaN` `peakDecayPerFrame`,** degrades safely: `bandCount` reflects the
+  custom array length, an empty array produces zero bands/peaks with no
+  crash, and a `NaN` `peakDecayPerFrame` collapses every peak to `0` every
+  frame (via the `stepPeak` fix above) rather than corrupting state —
+  confirmed by test as a regression guard for the fix.
+- **Controller/widget dispose-remount idempotency**: `dispose()` before
+  any message ever mounted a widget is a safe no-op; a second `dispose()`
+  call is idempotent (no extra `setWidget` call); a `message_start`
+  arriving after `dispose()` remounts a fresh widget that re-subscribes to
+  the shared scheduler; a `message_update`/`message_end` arriving with no
+  prior `message_start` (mount never happened) stays dormant/clears
+  gracefully with no crash; and `onFrame` tolerates `sampleRate` returning
+  `NaN` directly (not just `null`) without corrupting the state's bands —
+  all newly covered, matching the dispose/remount pattern verified by
+  every prior controller's hardening pass.
+
+`bun test packages/coding-agent/test/cadence-equalizer.test.ts`: 49 pass,
+0 fail. Root `bun run check` green across all workspaces after the fix.
+Bead: oh-my-pi-9md.

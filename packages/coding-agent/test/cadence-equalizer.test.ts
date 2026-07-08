@@ -68,6 +68,23 @@ function manualWallClock(start = 0): WallClock & { advance(ms: number): void } {
 const noopTui = { requestComponentRender: () => {} };
 const fullEnv = { hasUI: true, isTTY: true, env: {} as Record<string, string | undefined> };
 
+function recordingContext(overrides: Partial<CadenceEqualizerContext> = {}): {
+	ctx: CadenceEqualizerContext;
+	calls: Array<{ key: string; content: unknown }>;
+} {
+	const calls: Array<{ key: string; content: unknown }> = [];
+	const ctx: CadenceEqualizerContext = {
+		hasUI: true,
+		isTTY: true,
+		env: {},
+		motionSetting: "full",
+		theme: idTheme,
+		setWidget: (key, content) => calls.push({ key, content }),
+		...overrides,
+	};
+	return { ctx, calls };
+}
+
 function assistantMessage(timestamp: number, output: number, duration?: number): MessageStartEvent["message"] {
 	return {
 		role: "assistant",
@@ -340,23 +357,6 @@ describe("cadence equalizer widget lifecycle", () => {
 });
 
 describe("cadence equalizer controller", () => {
-	function recordingContext(overrides: Partial<CadenceEqualizerContext> = {}): {
-		ctx: CadenceEqualizerContext;
-		calls: Array<{ key: string; content: unknown }>;
-	} {
-		const calls: Array<{ key: string; content: unknown }> = [];
-		const ctx: CadenceEqualizerContext = {
-			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
-			theme: idTheme,
-			setWidget: (key, content) => calls.push({ key, content }),
-			...overrides,
-		};
-		return { ctx, calls };
-	}
-
 	it("mounts an animated widget on the first streamed assistant message", () => {
 		const scheduler = manualScheduler();
 		const wallClock = manualWallClock();
@@ -464,5 +464,222 @@ describe("cadence equalizer controller", () => {
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
+	});
+});
+
+describe("cadence equalizer hardening: adversarial pure math", () => {
+	it("stepPeak clamps to [0, 1] even when decayPerFrame is non-finite (real bug: Math.max propagated NaN/Infinity unclamped)", () => {
+		// Math.max(x, NaN) is NaN regardless of argument order, and Math.max(x, Infinity) is Infinity --
+		// stepPeak's final line used to return that raw Math.max result with no clamp, violating its own
+		// "Pure; clamps to [0, 1]" contract whenever a caller (or an adversarial constructor option) fed it
+		// a non-finite decayPerFrame. clamp01 treats every non-finite value (NaN *and* +-Infinity) as
+		// invalid and maps it to 0 (not a sign-aware clamp to the boundary), so both a NaN and a
+		// -Infinity decayPerFrame now resolve to a safe 0 instead of escaping unclamped.
+		expect(stepPeak(0.5, 0.3, Number.NaN)).toBe(0);
+		expect(stepPeak(0.5, 0.3, -Infinity)).toBe(0);
+		expect(stepPeak(0.5, 0.3, Infinity)).toBe(0.3); // decays instantly to current -- already correct pre-fix
+		expect(Number.isFinite(stepPeak(0.5, 0.3, Number.NaN))).toBe(true);
+		expect(Number.isFinite(stepPeak(0.5, 0.3, -Infinity))).toBe(true);
+	});
+
+	it("stepPeak clamps a non-finite prevPeak or currentAmplitude to [0, 1]", () => {
+		// clamp01 maps any non-finite prevPeak (NaN or +-Infinity alike) to 0, so it never out-holds
+		// currentAmplitude -- the peak-hold marker degrades to "no held peak" rather than a bogus extreme.
+		expect(stepPeak(Number.NaN, 0.4, 0.02)).toBe(0.4);
+		expect(stepPeak(Infinity, 0.4, 0.02)).toBe(0.4);
+		expect(stepPeak(-Infinity, 0.4, 0.02)).toBe(0.4);
+		expect(stepPeak(0.4, Number.NaN, 0.02)).toBeGreaterThanOrEqual(0); // NaN current clamps to 0, decay from 0.4 wins
+	});
+
+	it("stepBand degrades a non-finite alpha to a safe [0, 1] result rather than propagating it", () => {
+		// prev + (target - prev) * alpha: a non-finite alpha turns the whole sum non-finite, which
+		// stepBand's own clamp01 catches -- and since clamp01 maps every non-finite value (including
+		// +Infinity) to 0, an infinite-alpha step bottoms out at 0 regardless of step direction.
+		expect(stepBand(0.5, 0.3, Number.NaN)).toBe(0);
+		expect(stepBand(0.5, 0.9, Infinity)).toBe(0);
+		expect(stepBand(0.5, 0.1, Infinity)).toBe(0);
+		for (const alpha of [Number.NaN, Infinity, -Infinity]) {
+			const result = stepBand(0.5, 0.3, alpha);
+			expect(Number.isFinite(result)).toBe(true);
+			expect(result).toBeGreaterThanOrEqual(0);
+			expect(result).toBeLessThanOrEqual(1);
+		}
+	});
+
+	it("stepBands falls back to 0 for any prevBands/prevPeaks entry missing relative to the alphas array", () => {
+		const short = stepBands([0.5], [0.5], 0.9, BAND_ALPHAS);
+		expect(short.bands).toHaveLength(BAND_COUNT);
+		expect(short.peaks).toHaveLength(BAND_COUNT);
+		for (let i = 1; i < BAND_COUNT; i++) {
+			expect(Number.isFinite(short.bands[i])).toBe(true);
+			expect(Number.isFinite(short.peaks[i])).toBe(true);
+		}
+	});
+
+	it("stepBands ignores extra prevBands/prevPeaks entries beyond the alphas length", () => {
+		const longPrev = new Array(BAND_COUNT + 3).fill(0.7);
+		const result = stepBands(longPrev, longPrev, 0.9, BAND_ALPHAS);
+		expect(result.bands).toHaveLength(BAND_COUNT);
+		expect(result.peaks).toHaveLength(BAND_COUNT);
+	});
+
+	it("stepBands never mutates its adversarial (non-finite) inputs in place", () => {
+		const prevBands = [Number.NaN, Infinity, -Infinity, 0.5, 0.5];
+		const prevPeaks = [0.5, Number.NaN, Infinity, -Infinity, 0.5];
+		const snapshotBands = [...prevBands];
+		const snapshotPeaks = [...prevPeaks];
+		stepBands(prevBands, prevPeaks, Number.NaN, BAND_ALPHAS, Number.NaN);
+		expect(prevBands).toEqual(snapshotBands);
+		expect(prevPeaks).toEqual(snapshotPeaks);
+	});
+});
+
+describe("cadence equalizer hardening: state edge cases", () => {
+	it("pushSample(Infinity) coerces to idle, not saturation (Infinity is not finite)", () => {
+		const state = new CadenceEqualizerState();
+		state.pushSample(Infinity);
+		for (const v of state.snapshotBands()) expect(v).toBe(0);
+	});
+
+	it("an adversarial NaN peakDecayPerFrame injected at construction stays clamped in [0, 1] band after band (post-fix regression guard)", () => {
+		const state = new CadenceEqualizerState({ peakDecayPerFrame: Number.NaN });
+		for (let i = 0; i < 10; i++) state.pushSample(1);
+		for (const p of state.snapshotPeaks()) {
+			expect(Number.isFinite(p)).toBe(true);
+			expect(p).toBeGreaterThanOrEqual(0);
+			expect(p).toBeLessThanOrEqual(1);
+		}
+	});
+
+	it("bandCount reflects a custom alphas array length, not the BAND_COUNT constant", () => {
+		const state = new CadenceEqualizerState({ alphas: [0.5, 0.5, 0.5] });
+		expect(state.bandCount).toBe(3);
+		expect(state.snapshotBands()).toHaveLength(3);
+		expect(state.snapshotPeaks()).toHaveLength(3);
+	});
+
+	it("an empty alphas array degrades to zero bands with no crash", () => {
+		const state = new CadenceEqualizerState({ alphas: [] });
+		expect(state.bandCount).toBe(0);
+		state.pushSample(1);
+		expect(state.snapshotBands()).toEqual([]);
+		expect(state.snapshotPeaks()).toEqual([]);
+	});
+});
+
+describe("cadence equalizer hardening: rendering edge cases", () => {
+	it('never renders the literal string "undefined" for adversarial NaN/Infinity band or peak values', () => {
+		const bands = [Number.NaN, Infinity, -Infinity, 0.5, Number.NaN];
+		const peaks = [Number.NaN, Infinity, -Infinity, 0.5, Number.NaN];
+		const row = renderEqualizerRow(bands, peaks, idTheme);
+		const compact = renderCompactEqualizer(bands, idTheme);
+		expect(row).not.toContain("undefined");
+		expect(row).not.toContain("NaN");
+		expect(compact).not.toContain("undefined");
+		expect(compact).not.toContain("NaN");
+	});
+
+	it("renderEqualizerRow tolerates a peaks array shorter than bands (missing entries fall back to 0)", () => {
+		const bands = [0.5, 0.5, 0.5];
+		const row = renderEqualizerRow(bands, [0.5], idTheme);
+		expect(row).not.toContain("undefined");
+		// Bands beyond the peaks array read a 0 peak, so their gap (0 - amplitude) never clears the cap threshold.
+		expect(row.match(/‾/g)?.length ?? 0).toBe(0);
+	});
+
+	it("renderEqualizerText treats NaN and -Infinity the same as idle", () => {
+		expect(renderEqualizerText(Number.NaN)).toBe("eq --");
+		expect(renderEqualizerText(-Infinity)).toBe("eq --");
+		expect(renderEqualizerText(Infinity)).toBe("eq --");
+	});
+});
+
+describe("cadence equalizer hardening: widget/controller lifecycle", () => {
+	it("dispose before any message ever mounted a widget is a safe no-op", () => {
+		const scheduler = manualScheduler();
+		const controller = new CadenceEqualizerController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("dispose called twice in a row is idempotent", () => {
+		const scheduler = manualScheduler();
+		const controller = new CadenceEqualizerController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(callsAfterFirstDispose); // second dispose is a no-op, no extra setWidget call
+	});
+
+	it("a message_start arriving after dispose remounts a fresh widget", () => {
+		const scheduler = manualScheduler();
+		const controller = new CadenceEqualizerController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
+		controller.dispose(ctx);
+		controller.onMessageStart(messageStartEvent(assistantMessage(1, 0)), ctx);
+		const factory = calls[calls.length - 1].content as
+			| ((tui: typeof noopTui, theme: CadenceEqualizerTheme) => CadenceEqualizerWidget)
+			| undefined;
+		expect(factory).not.toBeUndefined();
+		factory?.(noopTui, idTheme); // constructing the widget is what actually subscribes it to the shared scheduler
+		expect(scheduler.running).toBe(true);
+	});
+
+	it("message_update arriving before any message_start leaves the controller dormant (no mount, no crash)", () => {
+		const scheduler = manualScheduler();
+		const controller = new CadenceEqualizerController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onMessageUpdate(messageUpdateEvent(assistantMessage(0, 100)), ctx);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("message_end for a message that never had a message_start still clears the tracked sample without crashing", () => {
+		const scheduler = manualScheduler();
+		const controller = new CadenceEqualizerController({ scheduler });
+		const { ctx } = recordingContext();
+
+		expect(() => controller.onMessageEnd(messageEndEvent(assistantMessage(0, 100, 200)), ctx)).not.toThrow();
+		expect(controller.sampleRate(0)).toBeNull();
+	});
+
+	it("an assistant message with a NaN duration falls back to wall-clock streaming duration instead of crashing", () => {
+		const scheduler = manualScheduler();
+		const wallClock = manualWallClock(0);
+		const controller = new CadenceEqualizerController({ scheduler, wallClock });
+		const { ctx } = recordingContext();
+
+		controller.onMessageStart(messageStartEvent(assistantMessage(0, 100, Number.NaN)), ctx);
+		wallClock.advance(500);
+		expect(() => controller.sampleRate(wallClock.now())).not.toThrow();
+		expect(controller.sampleRate(wallClock.now())).toBeCloseTo(200, 5);
+	});
+
+	it("onFrame tolerates sampleRate returning NaN (not just null) without corrupting state", () => {
+		const scheduler = manualScheduler();
+		const wallClock = manualWallClock();
+		const policy = new MotionPolicy(fullEnv, "full");
+		const host = new AnimationHost({ policy, scheduler });
+		const state = new CadenceEqualizerState();
+		const widget = new CadenceEqualizerWidget({
+			tui: noopTui,
+			host,
+			policy,
+			state,
+			theme: idTheme,
+			wallClock,
+			sampleRate: () => Number.NaN,
+		});
+
+		scheduler.advance(33);
+		for (const v of state.snapshotBands()) expect(Number.isFinite(v)).toBe(true);
+		widget.dispose();
 	});
 });

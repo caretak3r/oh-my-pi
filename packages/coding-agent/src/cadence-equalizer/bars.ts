@@ -34,7 +34,7 @@ export function stepBand(prevAmplitude: number, target: number, alpha: number): 
 export function stepPeak(prevPeak: number, currentAmplitude: number, decayPerFrame: number): number {
 	const current = clamp01(currentAmplitude);
 	const decayed = clamp01(prevPeak) - decayPerFrame;
-	return Math.max(current, decayed);
+	return clamp01(Math.max(current, decayed));
 }
 
 /**
