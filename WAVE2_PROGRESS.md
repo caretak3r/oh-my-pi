@@ -1164,8 +1164,9 @@ next to the `./model-weather-vane/*` cluster.
 None. All fifteen ideas from `IDEA_WIZARD_IDEAS_WAVE2.md` (top 5 + next 10)
 are now implemented, each as its own atomic commit with behavioral tests, a
 green `bun check`, and a filed+closed bead. All fifteen have also completed
-their edge-case hardening pass. Remaining work per the run's stop
-condition: an integration/gallery demo if feasible.
+their edge-case hardening pass. The run's stop condition is now fully met:
+the integration/gallery demo (`packages/coding-agent/test/wave2-gallery.test.ts`)
+is done — see "Integration/gallery demo" below.
 
 ## Hardening pass
 
@@ -2250,3 +2251,68 @@ integration/gallery demo.
 `bun test packages/coding-agent/test/prompt-charge.test.ts`: 56 pass,
 0 fail. Root `bun check` green across all workspaces after the fix.
 Bead: oh-my-pi-n8e.
+
+## Integration/gallery demo
+
+Every one of the 15 hardening passes above added exhaustive edge-case tests
+to a single feature's own test file, and every one of those files mounts
+only its own controller — nothing in the run so far ever constructed all 15
+controllers together, in one session, sharing one `ctx.setWidget` surface,
+the way `sdk.ts`'s `createAgentSession` actually wires them. That gap is
+exactly the kind of "verify the signal is real" scope this run has applied
+per-feature, just aimed at the composed system instead of a single
+controller: a key collision between two features' `WIDGET_KEY`s, a
+placement-split drift from the documented 8/7 aboveEditor/belowEditor
+balance, or shared-module state leaking a stray `undefined`/`NaN` between
+features would all be invisible to 15 files that each only ever construct
+one controller at a time.
+
+Added `packages/coding-agent/test/wave2-gallery.test.ts` (no source files
+touched): constructs all 15 controllers, each wired to its own
+feature-shaped fake context but sharing one `setWidget` spy, and drives
+each through the one representative "active" event/call its own test file
+already uses for that purpose (e.g. `onToolCall` for Tool Constellation,
+`onMessageStart`/`onMessageUpdate` for Token Tide, `mount`+`onInput` for
+Prompt Charge, a fake `AgentFleetRegistrySource` + `watch()` + a `"sub"`
+registration for Agent Fleet). Every fake context sets `motionSetting:
+"off"`, which forces every controller's shared `MotionPolicy` to the `off`
+tier regardless of `hasUI`/`isTTY` (`resolveMotionTier`'s first check) —
+so every `setWidget` call carries a plain `string[]` static render instead
+of an animated-widget factory, with no fake `TUI` needed anywhere in the
+file.
+
+Three tests:
+1. Drives all 15, collapses each feature's captured calls to its last (mount
+   then a later repaint, for the features that repaint), and asserts:
+   exactly 15 distinct `WIDGET_KEY`s render defined content; the
+   aboveEditor/belowEditor split across those 15 is exactly 8/7, matching
+   the per-feature table earlier in this doc (locks in today's layout
+   balance — a future feature that changes its placement without updating
+   this doc fails loudly here); no rendered line across all 15 features'
+   content contains the literal substring `"undefined"` or `"NaN"` (a
+   cross-feature sanity net layered on top of the exhaustive
+   per-feature `NaN`-escape hardening above, specifically checking nothing
+   regresses when all 15 run side by side); every feature's content is a
+   non-empty `string[]`.
+2. A small module-scope `renderGallery()` helper (not exported — test-file
+   internal) composes the 15 captured widgets into a labeled "Above editor"
+   / "Below editor" text snapshot, each section listing every feature's key
+   and its indented rendered lines — a human-readable, byte-stable-ish
+   snapshot of the whole Wave 2 suite in one composed view, asserted to
+   contain all 15 keys and produce exactly 8 above-editor / 7 below-editor
+   blocks. Doubles as living documentation and a regression net if a future
+   feature is added without wiring it into the gallery.
+3. Disposes all 15 controllers in `sdk.ts`'s exact registration order
+   (tool-constellation through prompt-charge) after they were all
+   mounted/active, asserting none throw — simulating `session_shutdown`
+   cascading through the full real extension stack, which no per-feature
+   file exercises (each only disposes its own single controller).
+
+`bun test packages/coding-agent/test/wave2-gallery.test.ts`: 3 pass, 0 fail
+(run twice to confirm no flakiness — deterministic, no timers or real
+clocks involved since every controller resolves to the `off` motion tier).
+Full `bun test` confirms the pre-existing unrelated baseline of failures
+(SSH exec-gating, TUI streaming/spinner repaint, async job manager, Python
+runner shell-output, ReviewCommand, and a handful of others) is unchanged
+and none of the 15 feature test files or the new gallery file appear in it.
+Root `bun check` green across all workspaces. Bead: oh-my-pi-bbp.
