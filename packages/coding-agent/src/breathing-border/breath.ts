@@ -70,10 +70,10 @@ export function pulsePosition(elapsedMs: number, periodMs: number, width: number
 
 const GLYPH_RAMP = ["·", "─", "━", "█"] as const;
 
-/** Bucket a 0..1 brightness into a border-weight glyph, dimmest to heaviest. */
+/** Bucket a 0..1 brightness into a border-weight glyph, dimmest to heaviest. Non-finite input (e.g. `NaN`) falls back to the dimmest glyph rather than an out-of-bounds lookup. */
 export function brightnessGlyph(brightness: number): string {
 	const idx = Math.min(GLYPH_RAMP.length - 1, Math.max(0, Math.floor(brightness * GLYPH_RAMP.length)));
-	return GLYPH_RAMP[idx];
+	return GLYPH_RAMP[idx] ?? GLYPH_RAMP[0];
 }
 
 export type BorderBrightnessToken = "borderMuted" | "border" | "borderAccent";

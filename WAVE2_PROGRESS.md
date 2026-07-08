@@ -1182,7 +1182,7 @@ the pass is resumable across iterations.
 | 2 | Token Tide | ✅ done | oh-my-pi-aqe |
 | 3 | Session Bonsai | ✅ done | oh-my-pi-cxn |
 | 4 | Todo Meteors | ✅ done | oh-my-pi-jj0 |
-| 5 | Breathing Border | ⬜ pending | — |
+| 5 | Breathing Border | ✅ done | oh-my-pi-bw0 |
 | 6 | Agent Fleet | ⬜ pending | — |
 | 7 | Cost Candle | ⬜ pending | — |
 | 8 | Reflection Ripple | ⬜ pending | — |
@@ -1411,6 +1411,75 @@ phase-diffing/pruning, and the controller's dispose/remount lifecycle:
   exercised — a `tool_result` arriving after `dispose()` correctly
   remounts a fresh widget rather than staying dormant, since `#mount`
   resets to `undefined` on teardown.
+
+### 5. Breathing Border — hardening notes
+
+Added 15 edge-case behavioral tests to
+`packages/coding-agent/test/breathing-border.test.ts` (53 total, up from
+38), covering `breath.ts`'s pure envelope/glyph/token math under
+adversarial (`NaN`/`Infinity`/backward-clock) inputs, `BreathingBorderState`
+edge cases, and the controller's mount-order/dispose/remount lifecycle:
+
+- **Real bug found and fixed**: `brightnessGlyph` had the exact same
+  missing-fallback shape as Session Bonsai's `budGlyph` and Todo Meteors'
+  `meteorGlyph`/`emberGlyph` bugs — `GLYPH_RAMP[Math.floor(NaN * 4)]` is
+  `GLYPH_RAMP[NaN]`, which is `undefined` with no bounds-safe fallback,
+  which would render the literal string `"undefined"` into the border row
+  instead of degrading to the dimmest glyph. Confirmed via a standalone
+  repro before touching source (`brightnessGlyph(NaN) === undefined`).
+  Fixed with the same `?? GLYPH_RAMP[0]` pattern the three prior fixes
+  established. `NaN` is genuinely reachable here: `breathEnvelope`/
+  `exhaleEnvelope` both propagate `NaN` straight through when the caller's
+  injected clock produces a `NaN` `now()` (e.g. `breathElapsedMs` computes
+  `Math.max(0, now - breathStartedAt)`, which is `NaN` if `now` is `NaN`) —
+  a fourth occurrence of this exact bug class is enough to call it a
+  systemic gap worth grep-checking on any future glyph-ramp helper by
+  default rather than waiting to be surprised again.
+- **`brightnessToken(NaN)` is a documented quirk, not fixed**: unlike the
+  glyph ramp's array lookup, `brightnessToken` is a plain `<` comparison
+  chain (`NaN < 0.15`, `NaN < 0.6`, both false), so it falls through to the
+  brightest bucket (`"borderAccent"`) rather than corrupting text — same
+  category as Todo Meteors' `meteorColumn(NaN)` finding: a numeric/logic
+  quirk with no visible-corruption risk, so left alone.
+- **`pulsePosition`'s guard doesn't catch `NaN` width or period**: the
+  `width <= 0 || periodMs <= 0` guard is false for `NaN` (all comparisons
+  with `NaN` are false), so a `NaN` width or a `NaN` elapsed/period
+  propagates `NaN` through to the caller rather than clamping to `0`. Traced
+  all the way through `renderBreathingBorderRow`'s `travelPos` handling: a
+  `NaN` `pos` makes both `BORDER_CHAR.repeat(pos)` calls receive `NaN`,
+  which `String.prototype.repeat` treats as `0` (not a `RangeError`, unlike
+  a genuine negative count) — so this never crashes, and after the
+  `brightnessGlyph` fix above it never prints `"undefined"` either. Locked
+  in with a dedicated "never contains the literal text 'undefined'" test
+  across both tiers rather than fixing the guard, since the failure mode is
+  fully contained.
+- **`renderBreathingBorderRow` with a `NaN` width** also skips the
+  `width <= 0` early-return empty-row path for the same `NaN <= 0 is false`
+  reason, but resolves harmlessly to an empty string via the same
+  `repeat(NaN) === ""` behavior — documented as a surprising-but-harmless
+  quirk rather than a second guard needing a fix.
+- **`BreathingBorderState` edge cases**: `settleIfDone` is idempotent once
+  idle (repeated calls after the first `true` stay `false`, no re-trigger);
+  calling `applyAgentEnd` twice in a row (e.g. a duplicate event) correctly
+  restarts the exhale timer from the second call rather than keeping the
+  first's start time; `applyTurnEnd` with no matching `turn_start` ever
+  observed is a no-op (guarded by `turnStartedAt === undefined`); a
+  backward-skewed turn (`turn_end`'s `now` earlier than `turn_start`'s)
+  produces a negative raw duration that `breathPeriodMsForTurnDuration`'s
+  own `<= 0` guard already clamps to the base period; and
+  `breathElapsedMs`/`exhaleElapsedMs` both clamp backward clock skew to `0`
+  via their existing `Math.max(0, ...)` calls.
+- **Controller mount-order and dispose/remount**: `agent_end` firing before
+  any `agent_start` (the doc comment's "unlikely case it fires first")
+  correctly mounts a fresh widget straight into the (no-op, since state was
+  never `active`) exhale path rather than crashing on an unmounted state;
+  `dispose()` before any mount and a second `dispose()` after a real
+  teardown are both silent no-ops (matches every prior feature's
+  pre-mount-guard finding); `turn_start`/`turn_end` before any
+  `agent_start` update `BreathingBorderState` without mounting a widget;
+  and — the same shape Session Bonsai/Todo Meteors' hardening passes first
+  exercised — a fresh `agent_start` after `dispose()` correctly remounts
+  rather than staying dormant.
 
 Two real bugs found and fixed (`meteorGlyph(NaN)` and `emberGlyph(NaN)` →
 literal `"undefined"` in rendered output, the same class as Session

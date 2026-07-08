@@ -4,6 +4,8 @@ import {
 	BASE_BREATH_PERIOD_MS,
 	breathEnvelope,
 	breathPeriodMsForTurnDuration,
+	brightnessGlyph,
+	brightnessToken,
 	EXHALE_DURATION_MS,
 	exhaleEnvelope,
 	MAX_BREATH_PERIOD_MS,
@@ -480,5 +482,166 @@ describe("breathing border controller", () => {
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
+	});
+
+	it("dispose before any mount is a no-op: no setWidget call at all", () => {
+		const controller = new BreathingBorderController();
+		const { ctx, calls } = recordingContext();
+
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("dispose is idempotent: a second call after teardown does not re-invoke setWidget", () => {
+		const scheduler = manualScheduler();
+		const controller = new BreathingBorderController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onAgentStart({ type: "agent_start" }, ctx);
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(callsAfterFirstDispose); // no additional setWidget(undefined) call
+	});
+
+	it("agent_end fired before any agent_start mounts fresh (the documented unlikely-order case), starting straight into the exhale", () => {
+		const scheduler = manualScheduler();
+		const controller = new BreathingBorderController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+		expect(calls).toHaveLength(1);
+		expect(typeof calls[0].content).toBe("function");
+		expect(controller.state.phase).toBe("idle"); // applyAgentEnd from idle is a no-op per BreathingBorderState
+	});
+
+	it("a fresh agent_start after dispose() remounts (event-after-dispose is not a dead controller)", () => {
+		const scheduler = manualScheduler();
+		const controller = new BreathingBorderController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onAgentStart({ type: "agent_start" }, ctx);
+		controller.dispose(ctx);
+		expect(calls[calls.length - 1].content).toBeUndefined();
+
+		controller.onAgentStart({ type: "agent_start" }, ctx);
+		expect(typeof calls[calls.length - 1].content).toBe("function");
+		expect(controller.state.phase).toBe("active");
+	});
+
+	it("onTurnStart/onTurnEnd before any agent_start are safely absorbed into state with no widget mount", () => {
+		const scheduler = manualScheduler();
+		const controller = new BreathingBorderController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onTurnStart({ type: "turn_start", turnIndex: 0, timestamp: 0 }, ctx);
+		scheduler.advance(1);
+		controller.onTurnEnd({ type: "turn_end", turnIndex: 0, message: {} as never, toolResults: [] }, ctx);
+		expect(calls).toHaveLength(0);
+		expect(controller.state.snapshot().periodMs).toBe(MIN_BREATH_PERIOD_MS);
+	});
+});
+
+describe("breathing border hardening: adversarial/non-finite inputs", () => {
+	it("brightnessGlyph(NaN) falls back to the dimmest glyph instead of an out-of-bounds `undefined` lookup (real bug, fixed)", () => {
+		// GLYPH_RAMP[Math.floor(NaN * 4)] is GLYPH_RAMP[NaN] === undefined without a fallback —
+		// concatenated into a rendered row this would print the literal text "undefined".
+		expect(brightnessGlyph(Number.NaN)).toBe("·");
+		expect(typeof brightnessGlyph(Number.NaN)).toBe("string");
+	});
+
+	it("brightnessGlyph clamps +Infinity to the heaviest glyph and -Infinity to the dimmest", () => {
+		expect(brightnessGlyph(Number.POSITIVE_INFINITY)).toBe("█");
+		expect(brightnessGlyph(Number.NEGATIVE_INFINITY)).toBe("·");
+	});
+
+	it("brightnessToken(NaN) is a documented quirk, not a crash: NaN fails both threshold comparisons and falls through to the brightest bucket", () => {
+		// `NaN < 0.15` and `NaN < 0.6` are both false, so the fallthrough branch wins —
+		// unlike the glyph ramp this is a plain comparison chain, not an array lookup,
+		// so it degrades to a valid (if surprising) token rather than corrupting text.
+		expect(brightnessToken(Number.NaN)).toBe("borderAccent");
+	});
+
+	it("breathEnvelope/exhaleEnvelope propagate NaN for a NaN clock or period rather than silently clamping", () => {
+		expect(breathEnvelope(Number.NaN, BASE_BREATH_PERIOD_MS)).toBeNaN();
+		expect(breathEnvelope(100, Number.NaN)).toBeNaN();
+		expect(exhaleEnvelope(Number.NaN, EXHALE_DURATION_MS)).toBeNaN();
+	});
+
+	it("exhaleEnvelope clamps any non-positive elapsed (not just 0) to full brightness", () => {
+		expect(exhaleEnvelope(-1, EXHALE_DURATION_MS)).toBe(1);
+		expect(exhaleEnvelope(-1_000_000, EXHALE_DURATION_MS)).toBe(1);
+	});
+
+	it("pulsePosition returns 0 for non-positive width/period but propagates NaN when width or elapsed itself is NaN", () => {
+		expect(pulsePosition(100, BASE_BREATH_PERIOD_MS, 0)).toBe(0);
+		expect(pulsePosition(100, BASE_BREATH_PERIOD_MS, -5)).toBe(0);
+		expect(pulsePosition(100, 0, 10)).toBe(0);
+		// width<=0/periodMs<=0 guards don't catch NaN (NaN <= 0 is false), so these propagate NaN.
+		expect(pulsePosition(100, BASE_BREATH_PERIOD_MS, Number.NaN)).toBeNaN();
+		expect(pulsePosition(Number.NaN, BASE_BREATH_PERIOD_MS, 10)).toBeNaN();
+	});
+
+	it("breathPeriodMsForTurnDuration treats Infinity and NaN the same as no-turn-known: the base period, not an unclamped runaway value", () => {
+		expect(breathPeriodMsForTurnDuration(Number.POSITIVE_INFINITY)).toBe(BASE_BREATH_PERIOD_MS);
+		expect(breathPeriodMsForTurnDuration(Number.NaN)).toBe(BASE_BREATH_PERIOD_MS);
+	});
+
+	it("renderBreathingBorderRow never contains the literal text 'undefined' for a NaN envelope or NaN travelPos, at any tier", () => {
+		for (const tier of ["full", "subtle"] as const) {
+			expect(renderBreathingBorderRow(Number.NaN, 10, idTheme, tier)).not.toContain("undefined");
+			expect(renderBreathingBorderRow(Number.NaN, 10, idTheme, tier, Number.NaN)).not.toContain("undefined");
+			expect(renderBreathingBorderRow(0.5, 10, idTheme, tier, Number.NaN)).not.toContain("undefined");
+		}
+	});
+
+	it("renderBreathingBorderRow with a NaN width doesn't crash (falls through the width<=0 guard, but String.repeat(NaN) is '')", () => {
+		// NaN <= 0 is false, so this doesn't take the early-return empty-row path like a
+		// literal 0 or negative width does -- documented as a surprising but harmless quirk.
+		expect(() => renderBreathingBorderRow(0.5, Number.NaN, idTheme, "full")).not.toThrow();
+		expect(renderBreathingBorderRow(0.5, Number.NaN, idTheme, "full")).toBe("");
+	});
+
+	it("BreathingBorderState.settleIfDone is idempotent once idle: repeated calls stay false with no re-triggered onSettled", () => {
+		const state = new BreathingBorderState();
+		state.applyAgentStart(0);
+		state.applyAgentEnd(0);
+		expect(state.settleIfDone(EXHALE_DURATION_MS)).toBe(true); // fires exactly once
+		expect(state.settleIfDone(EXHALE_DURATION_MS)).toBe(false); // already idle, no re-trigger
+		expect(state.settleIfDone(EXHALE_DURATION_MS + 5000)).toBe(false);
+	});
+
+	it("BreathingBorderState.applyAgentEnd called twice in a row restarts the exhale timer from the second call", () => {
+		const state = new BreathingBorderState();
+		state.applyAgentStart(0);
+		state.applyAgentEnd(1000);
+		expect(state.exhaleElapsedMs(1500)).toBe(500);
+
+		state.applyAgentEnd(2000); // fires again mid-exhale, e.g. a second agent_end
+		expect(state.phase).toBe("exhaling");
+		expect(state.exhaleElapsedMs(2500)).toBe(500); // measured from the restarted start, not the first
+	});
+
+	it("BreathingBorderState.applyTurnEnd is ignored when no turn_start was ever observed (turnStartedAt undefined)", () => {
+		const state = new BreathingBorderState();
+		state.applyTurnEnd(0, 1000);
+		expect(state.snapshot().periodMs).toBe(BASE_BREATH_PERIOD_MS); // no turn duration recorded
+	});
+
+	it("BreathingBorderState clamps backward wall-clock skew in turn duration to the base period, never a negative-duration cadence", () => {
+		const state = new BreathingBorderState();
+		state.applyTurnStart(0, 5000);
+		state.applyTurnEnd(0, 1000); // "now" moved backward relative to turn_start
+		expect(state.snapshot().periodMs).toBe(BASE_BREATH_PERIOD_MS); // negative duration guarded by breathPeriodMsForTurnDuration
+	});
+
+	it("breathElapsedMs/exhaleElapsedMs clamp backward clock skew to 0 rather than going negative", () => {
+		const state = new BreathingBorderState();
+		state.applyAgentStart(5000);
+		expect(state.breathElapsedMs(1000)).toBe(0);
+
+		state.applyAgentEnd(5000);
+		expect(state.exhaleElapsedMs(1000)).toBe(0);
 	});
 });
