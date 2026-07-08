@@ -144,6 +144,25 @@ describe("token tide rate scale (pure)", () => {
 		expect(waveGlyph(0)).toBe(WAVE_GLYPHS[0]);
 		expect(waveGlyph(1)).toBe(WAVE_GLYPHS[WAVE_GLYPHS.length - 1]);
 	});
+
+	it("rateBucket and normalizeAmplitude treat Infinity/NaN as idle rather than crashing or misclassifying as burst", () => {
+		// Both functions guard on Number.isFinite first, so a runaway Infinity reading
+		// (e.g. a corrupt duration producing tokens/0) is treated as idle, not "loudest possible".
+		expect(rateBucket(Number.POSITIVE_INFINITY)).toBe("idle");
+		expect(rateBucket(Number.NEGATIVE_INFINITY)).toBe("idle");
+		expect(rateBucket(Number.NaN)).toBe("idle");
+		expect(normalizeAmplitude(Number.POSITIVE_INFINITY)).toBe(0);
+		expect(normalizeAmplitude(Number.NEGATIVE_INFINITY)).toBe(0);
+		expect(normalizeAmplitude(Number.NaN)).toBe(0);
+	});
+
+	it("waveGlyph clamps out-of-range amplitudes to the ramp's endpoints", () => {
+		expect(waveGlyph(-5)).toBe(WAVE_GLYPHS[0]);
+		expect(waveGlyph(1.5)).toBe(WAVE_GLYPHS[WAVE_GLYPHS.length - 1]);
+		// NaN satisfies neither the <= 0 nor >= 1 clamp branch, so it flows through as NaN;
+		// the ramp lookup then misses (WAVE_GLYPHS[NaN] is undefined) and falls back to index 0.
+		expect(waveGlyph(Number.NaN)).toBe(WAVE_GLYPHS[0]);
+	});
 });
 
 describe("token tide waveform rendering (pure)", () => {
@@ -186,6 +205,24 @@ describe("token tide waveform rendering (pure)", () => {
 	it("colors an active column by its rate bucket", () => {
 		const row = renderWaveformRow([200], 0, taggedTheme, 1);
 		expect(row).toBe(`${BUCKET_THEME_COLOR.burst}:${waveGlyph(1)}`);
+	});
+
+	it("clamps a zero or negative requested width to a single column instead of crashing or rendering empty", () => {
+		expect(renderWaveformRow([160], 0, idTheme, 0)).toHaveLength(1);
+		expect(renderWaveformRow([160], 0, idTheme, -10)).toHaveLength(1);
+	});
+
+	it("floors a fractional requested width to whole columns", () => {
+		expect(renderWaveformRow([160, 160, 160], 0, idTheme, 2.9)).toHaveLength(2);
+	});
+
+	it("renders an empty buffer as all-padded blank columns, none tagged with a rate-bucket color", () => {
+		const row = renderWaveformRow([], 0, taggedTheme, 3);
+		expect(row).toBe("dim: dim: dim: ");
+		for (const key of Object.keys(BUCKET_THEME_COLOR) as (keyof typeof BUCKET_THEME_COLOR)[]) {
+			if (key === "idle") continue;
+			expect(row).not.toContain(`${BUCKET_THEME_COLOR[key]}:`);
+		}
 	});
 });
 
@@ -239,6 +276,17 @@ describe("token tide ring buffer state", () => {
 		state.pushSample(-5);
 		state.pushSample(Number.NaN);
 		expect(state.snapshot()).toEqual([0, 0]);
+		state.pushSample(Number.POSITIVE_INFINITY);
+		expect(state.latest()).toBe(0);
+	});
+
+	it("degrades gracefully at a degenerate zero capacity instead of growing unbounded", () => {
+		const state = new TokenTideState({ capacity: 0 });
+		expect(state.snapshot()).toEqual([]);
+		state.pushSample(80);
+		state.pushSample(160);
+		expect(state.snapshot()).toEqual([]);
+		expect(state.latest()).toBe(0); // nothing ever survives the immediate shift
 	});
 });
 
@@ -442,5 +490,48 @@ describe("token tide controller", () => {
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
+	});
+
+	it("dispose is idempotent: a second call does not re-clear the widget or double-dispose the host", () => {
+		const scheduler = manualScheduler();
+		const controller = new TokenTideController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
+		controller.dispose(ctx);
+		const callCountAfterFirstDispose = calls.length;
+
+		expect(() => controller.dispose(ctx)).not.toThrow();
+		expect(calls).toHaveLength(callCountAfterFirstDispose); // no extra setWidget(undefined) call
+	});
+
+	it("dispose before any message ever mounted a widget is a safe no-op", () => {
+		const scheduler = manualScheduler();
+		const controller = new TokenTideController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		expect(() => controller.dispose(ctx)).not.toThrow();
+		expect(calls).toHaveLength(0);
+	});
+
+	it("onMessageUpdate/onMessageEnd before any onMessageStart do not crash and touch no widget", () => {
+		const scheduler = manualScheduler();
+		const controller = new TokenTideController({ scheduler });
+		const { ctx, calls } = recordingContext();
+
+		expect(() => controller.onMessageUpdate(messageUpdateEvent(assistantMessage(0, 50)), ctx)).not.toThrow();
+		expect(() => controller.onMessageEnd(messageEndEvent(assistantMessage(0, 50, 500)), ctx)).not.toThrow();
+		expect(calls).toHaveLength(0);
+	});
+
+	it("sampleRate returns null under backward clock skew (now before the tracked message's timestamp) instead of a negative rate", () => {
+		const scheduler = manualScheduler();
+		const wallClock = manualWallClock(10_000);
+		const controller = new TokenTideController({ scheduler, wallClock });
+		const dormantCtx = { hasUI: false } as TokenTideContext;
+
+		// Streaming message timestamped after "now" (clock jumped backward mid-session).
+		controller.onMessageStart(messageStartEvent(assistantMessage(20_000, 0)), dormantCtx);
+		expect(controller.sampleRate(wallClock.now())).toBeNull();
 	});
 });

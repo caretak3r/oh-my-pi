@@ -1179,7 +1179,7 @@ the pass is resumable across iterations.
 | # | Feature | Status | Bead |
 |---|---|---|---|
 | 1 | Tool Constellation | ✅ done | oh-my-pi-rxf |
-| 2 | Token Tide | ⬜ pending | — |
+| 2 | Token Tide | ✅ done | oh-my-pi-aqe |
 | 3 | Session Bonsai | ⬜ pending | — |
 | 4 | Todo Meteors | ⬜ pending | — |
 | 5 | Breathing Border | ⬜ pending | — |
@@ -1231,3 +1231,58 @@ Added 5 edge-case behavioral tests to
 No behavior changes were needed — every edge case degrades gracefully by
 design. `bun test packages/coding-agent/test/tool-constellation.test.ts`:
 28 pass, 0 fail. `bun check`: green.
+
+### 2. Token Tide — hardening notes
+
+Added 12 edge-case behavioral tests to
+`packages/coding-agent/test/token-tide.test.ts` (38 total, up from 26),
+covering `scale.ts`'s pure functions, `renderWaveformRow`'s width/buffer
+boundaries, `TokenTideState`'s ring buffer, and the controller's
+lifecycle/clock-skew edges:
+
+- **Infinity/NaN in `rateBucket`/`normalizeAmplitude`**: both functions
+  guard on `Number.isFinite` first, so `+Infinity` (e.g. a corrupted
+  duration producing a runaway tokens/ms ratio) is treated as `idle`/`0`,
+  not misclassified as the loudest `burst` bucket — confirmed rather than
+  assumed, since the naive reading of "clamp to max" would have predicted
+  `burst`/`1`.
+- **`waveGlyph(NaN)` lookup-miss quirk**: `NaN` satisfies neither the
+  `<= 0` nor `>= 1` clamp branch in `waveGlyph`, so it flows through as
+  `NaN` into `Math.floor(NaN * length)` → `NaN` → `WAVE_GLYPHS[NaN]` is
+  `undefined` → the `??` fallback silently resolves to `WAVE_GLYPHS[0]`
+  (blank), not the "loudest" end one might expect from a runaway value.
+  No crash, but the intuition that out-of-domain always clamps toward the
+  nearer conceptual extreme is wrong here specifically for `NaN` — worth
+  remembering if any future glyph-ramp helper is copied from this one.
+- **Zero/negative/fractional `renderWaveformRow` width**: `Math.max(1,
+  Math.floor(width))` already floors and clamps to at least one column;
+  confirmed `0`, `-10`, and `2.9` all render without throwing or producing
+  a zero-length row.
+- **Empty buffer**: `renderWaveformRow([], ...)` renders all-padded blank
+  columns with no bucket-colored glyph, matching the "nothing sampled yet"
+  case a freshly-mounted widget would show before its first frame tick.
+- **Degenerate zero-capacity `TokenTideState`**: constructing with
+  `capacity: 0` never grows past an empty buffer — every push immediately
+  triggers the `length > capacity` shift, so `latest()` stays `0` forever.
+  Graceful degradation, not reachable in production (`DEFAULT_CAPACITY` is
+  a fixed `48`), but locks in the same non-throwing contract Tool
+  Constellation's grid-saturation test established for its own fixed-size
+  structure.
+- **Controller dispose idempotency + pre-mount safety**: a second
+  `dispose()` call emits no extra `setWidget(..., undefined, ...)`, and
+  calling `dispose()`/`onMessageUpdate()`/`onMessageEnd()` before any
+  `onMessageStart()` ever mounted a widget is a safe no-op — the existing
+  `if (!this.#mount) return;` guards were correct but untested, mirroring
+  Tool Constellation's finding.
+- **Backward clock skew**: if `wallClock.now()` ever reads earlier than
+  the tracked message's `timestamp` (a clock adjustment mid-session), the
+  shared `calculateTokensPerSecond` provider's `resolvedDurationMs < 100`
+  guard already rejects the resulting negative elapsed time, so
+  `sampleRate` returns `null` rather than a nonsensical negative tok/s —
+  confirmed at the controller boundary, not just the provider's own tests.
+
+No behavior changes were needed — every edge case degrades gracefully by
+design; the `waveGlyph(NaN)` and Infinity-bucket findings were genuine
+"the intuitive answer is wrong" surprises worth documenting, not bugs.
+`bun test packages/coding-agent/test/token-tide.test.ts`: 38 pass, 0 fail.
+`bun check`: green.
