@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Tool Constellation, an ambient `belowEditor` widget that renders the session's tool activity as a small night-field: each tool type is a fixed star that flares on `tool_call` and traces a faint ley-line from the previously-used star. Built on the shared `@oh-my-pi/pi-animation` kit; gated by the new `animations` setting (off/subtle/full) with a static per-category tally fallback outside a TTY or under `NO_COLOR`/`CI`.
+
 ### Changed
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.

@@ -60,6 +60,7 @@
     "@oh-my-pi/omp-stats": "catalog:",
     "@oh-my-pi/pi-agent-core": "catalog:",
     "@oh-my-pi/pi-ai": "catalog:",
+    "@oh-my-pi/pi-animation": "catalog:",
     "@oh-my-pi/pi-catalog": "catalog:",
     "@oh-my-pi/pi-mnemopi": "catalog:",
     "@oh-my-pi/pi-natives": "catalog:",
@@ -538,6 +539,14 @@
     "./task/*": {
       "types": "./src/task/*.ts",
       "import": "./src/task/*.ts"
+    },
+    "./tool-constellation": {
+      "types": "./src/tool-constellation/index.ts",
+      "import": "./src/tool-constellation/index.ts"
+    },
+    "./tool-constellation/*": {
+      "types": "./src/tool-constellation/*.ts",
+      "import": "./src/tool-constellation/*.ts"
     },
     "./tool-discovery/*": {
       "types": "./src/tool-discovery/*.ts",
