@@ -1853,6 +1853,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		inlineExtensions.push((await import("./context-constellation")).createContextConstellationExtension);
 		inlineExtensions.push((await import("./diff-bloom")).createDiffBloomExtension);
 		inlineExtensions.push((await import("./cadence-equalizer")).createCadenceEqualizerExtension);
+		inlineExtensions.push((await import("./goal-horizon")).createGoalHorizonExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}

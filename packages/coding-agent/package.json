@@ -403,6 +403,14 @@
       "types": "./src/extensibility/plugins/marketplace/*.ts",
       "import": "./src/extensibility/plugins/marketplace/*.ts"
     },
+    "./goal-horizon": {
+      "types": "./src/goal-horizon/index.ts",
+      "import": "./src/goal-horizon/index.ts"
+    },
+    "./goal-horizon/*": {
+      "types": "./src/goal-horizon/*.ts",
+      "import": "./src/goal-horizon/*.ts"
+    },
     "./internal-urls": {
       "types": "./src/internal-urls/index.ts",
       "import": "./src/internal-urls/index.ts"

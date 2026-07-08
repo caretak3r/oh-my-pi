@@ -858,7 +858,118 @@ settings-schema entries. New `./cadence-equalizer` and
   run's per-feature-owns-its-off-tier-renderer convention (established
   since feature #1) even though the two strings are shaped similarly.
 
+## 13. 🌅 Goal Horizon (oh-my-pi-91i)
+
+**Status:** done.
+
+**Grounding:** the idea doc says "`goal_updated` → a sunrise-gradient bar
+filling toward the goal; milestones flare. Grounded in `Goal` /
+`GoalModeState`." Checked piece by piece:
+- `goal_updated` (`GoalUpdatedEvent`, `extensibility/shared-events.ts`) is
+  real, part of the subscribable `ExtensionEvent` union, and fires roughly
+  once per tool call while a `/goal` is active — `GoalRuntime.#commitState`
+  (`goals/runtime.ts`) emits it from nearly every state-mutating method,
+  plus every token/wall-clock usage flush (`#flushUsageLocked`). Comparable
+  cadence to Diff Bloom's `tool_result` trigger, not a rare one-shot event.
+- `Goal`/`GoalModeState` (`goals/state.ts`) are real types with exactly the
+  fields listed in the idea's own grounding — `id`, `objective`, `status`,
+  `tokenBudget?`, `tokensUsed`, `timeUsedSeconds`, `createdAt`, `updatedAt`.
+- **"Milestones flare" has zero grounding.** A full-tree grep for
+  "milestone" turns up nothing except an unrelated `gh-cache-invalidation.ts`
+  CLI flag — there is no milestone concept, field, or event anywhere in this
+  codebase, unlike every prior feature's signal-reinterpretation cases
+  (Memory Crystals' `result`, Todo Meteors' `todo_reminder`), which at least
+  had a real-but-differently-shaped field to work from. Shipped as a wholly
+  invented visual layer instead: four synthetic thresholds
+  (`MILESTONE_FRACTIONS = [0.25, 0.5, 0.75, 1]`, `goal-horizon/horizon.ts`)
+  computed purely from `tokensUsed / tokenBudget`, with a decaying flare
+  glyph overlay when a fresh crossing is detected — documented here as an
+  invention, not a re-grounding.
+- **`Goal.tokenBudget` is optional** (`goals/state.ts`) — a goal created via
+  `/goal` with no budget has no numeric target at all to fill toward
+  (`goals/runtime.ts`'s own `remainingTokens()` returns `null` in that
+  case). `goalFraction()` returns `undefined` for this case, and the
+  renderer falls back to an indeterminate pulsing glyph plus a running
+  token count instead of a bar — an explicit scoped branch, not a silent
+  0%-forever bar.
+- No `ctx.getGoal()` pull accessor exists on `ExtensionContext` (checked —
+  unlike Context Constellation's `getContextUsage()`), so this feature is
+  fully push-driven off the event payload; there is nothing to reconcile
+  against on a later poll.
+- Overlap check: none of the twelve already-shipped Wave 2 features
+  (`tool-constellation`, `token-tide`, `session-bonsai`, `todo-meteors`,
+  `breathing-border`, `agent-fleet`, `cost-candle`, `reflection-ripple`,
+  `memory-crystals`, `context-constellation`, `diff-bloom`,
+  `cadence-equalizer`) render "progress toward a goal" as a concept — Todo
+  Meteors explicitly scoped `goal_updated` out of its own bead (see its
+  section above) rather than wiring it, so this is the first feature to
+  actually visualize `Goal`/`GoalModeState`.
+
+**Module:** `packages/coding-agent/src/goal-horizon/` (`horizon.ts`,
+`state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createGoalHorizonExtension` pushed as the thirteenth inline
+extension in `sdk.ts` (`createAgentSession`), subscribed to `goal_updated`.
+Placed `aboveEditor` (alongside Diff Bloom/Reflection Ripple/Cost
+Candle/Tool Constellation/Todo Meteors, now 7/6 aboveEditor/belowEditor —
+an ambient progress bar reads more naturally near the input than in the
+belowEditor tray cluster). Reuses the existing shared `animations` setting;
+no new settings-schema entries. New `./goal-horizon` and `./goal-horizon/*`
+package.json export paths, inserted alphabetically between
+`./extensibility/plugins/marketplace/*` and `./internal-urls`.
+
+**Test command:** `bun test packages/coding-agent/test/goal-horizon.test.ts`
+— 30 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- Unlike every prior lazily-mounted-then-transient feature (Diff Bloom,
+  Reflection Ripple), Goal Horizon mounts once on the first `goal_updated`
+  event and stays mounted for the extension's lifetime, mirroring Cost
+  Candle's persistent-ambient-meter precedent — a goal's progress is a
+  standing status, not a momentary flash. If the goal is later dropped
+  (`goal: null`), the widget stays mounted and renders "no active goal"
+  rather than unmounting, the same "no early-teardown wiring" structural
+  limitation documented throughout this file
+  (`backpressureFromTui(tui)`/dynamic unmount is not wired into
+  `AnimationHost` construction for any Wave 2 feature).
+- The sunrise gradient is a **per-cell** color ramp, not a single bar color:
+  each filled column's own position (not the overall fraction) is
+  classified into a `HorizonBucket` (`predawn`→`dim`, `dawn`→`syntaxType`,
+  `morning`→`syntaxVariable`, `noon`→`syntaxFunction`, `zenith`→`warning`,
+  the same "existing `ThemeColor` tokens, not raw ANSI" convention as
+  Token Tide's `BUCKET_THEME_COLOR`), so the filled portion of the bar
+  visibly warms from cool/dim at the left toward hot amber at the fill
+  edge — the literal "sunrise-gradient bar" rather than a single flat tint.
+- Milestone crossings are detected per-goal-`id`: a fresh goal (a new `id`
+  replacing the previous one via `/goal` create) silently initializes its
+  crossed-milestone count from whatever fraction it starts at, without
+  retroactively flaring — only a crossing detected on an *update to the
+  same goal* triggers the flare overlay. Prevents a goal created already
+  past 75% (e.g. resumed from a prior session) from opening with a
+  spurious flash.
+- Flare rendering follows the established decaying-overlay convention
+  (`flareIntensity`, linear decay to 0 by `FLARE_DECAY_MS` = 900ms, same
+  shape as Cost Candle's `gutterEnvelope`): the flare glyph
+  (`FLARE_GLYPHS` ramp, dim→`✦`/`✷`→`☀`) replaces whichever bar column the
+  most recently crossed milestone lands on, fading back to that column's
+  normal gradient color as it decays.
+- `GoalStatus` values (`complete`/`dropped`/`paused`) override the bar's
+  per-cell gradient with a single flat color (`success`/`dim`/`dim`
+  respectively) rather than mixing status color with position color — a
+  completed or paused goal reads as a single unambiguous state, not a
+  gradient that happens to also be green.
+- `subtle` tier collapses to one glyph (colored by the overall fraction's
+  dominant bucket, not per-cell) plus the percentage — same "collapse to
+  one dominant signal" convention as every prior feature's subtle tier.
+- Off-tier fallback: `"🌅 objective NN% (used/budget tok)"` for a budgeted
+  goal, `"🌅 objective — used tok (no budget)"` for an unbounded one,
+  falling back to `"no active goal"` before any goal — matching the
+  established per-feature-owns-its-off-tier-renderer, plain-string
+  convention (no ANSI) since the off tier never receives a theme.
+
 ## Ideas not yet started
 
-Ideas 13–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Goal Horizon,
-Model Weather Vane, Prompt Charge) remain unstarted.
+Idea 14–15 from `IDEA_WIZARD_IDEAS_WAVE2.md`'s "next 10" (Model Weather
+Vane, Prompt Charge) remain unstarted.
