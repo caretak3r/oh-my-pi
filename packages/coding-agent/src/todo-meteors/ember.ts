@@ -19,7 +19,7 @@ const METEOR_GLYPHS = ["☄", "*", "·"] as const;
 export function meteorGlyph(progress: number): string {
 	const clamped = progress <= 0 ? 0 : progress >= 1 ? 1 : progress;
 	const index = Math.min(METEOR_GLYPHS.length - 1, Math.floor(clamped * METEOR_GLYPHS.length));
-	return METEOR_GLYPHS[index];
+	return METEOR_GLYPHS[index] ?? METEOR_GLYPHS[0];
 }
 
 /** Column (0-based, left to right) a meteor sits at within a lane of `width` columns at `progress`. Pure, monotonic non-decreasing in progress. */
@@ -69,5 +69,5 @@ const EMBER_GLYPHS = ["·", "○", "◉", "●"] as const;
 export function emberGlyph(brightness: number): string {
 	const clamped = brightness <= 0 ? 0 : brightness >= 1 ? 1 : brightness;
 	const index = Math.min(EMBER_GLYPHS.length - 1, Math.floor(clamped * EMBER_GLYPHS.length));
-	return EMBER_GLYPHS[index];
+	return EMBER_GLYPHS[index] ?? EMBER_GLYPHS[0];
 }

@@ -1181,7 +1181,7 @@ the pass is resumable across iterations.
 | 1 | Tool Constellation | ✅ done | oh-my-pi-rxf |
 | 2 | Token Tide | ✅ done | oh-my-pi-aqe |
 | 3 | Session Bonsai | ✅ done | oh-my-pi-cxn |
-| 4 | Todo Meteors | ⬜ pending | — |
+| 4 | Todo Meteors | ✅ done | oh-my-pi-jj0 |
 | 5 | Breathing Border | ⬜ pending | — |
 | 6 | Agent Fleet | ⬜ pending | — |
 | 7 | Cost Candle | ⬜ pending | — |
@@ -1351,3 +1351,69 @@ rendered output); every other edge case degraded gracefully by design.
 `bun test packages/coding-agent/test/session-bonsai.test.ts`: 45 pass, 0
 fail. Root `bun run check` green across all workspaces after the fix.
 `bun check`: green.
+
+### 4. Todo Meteors — hardening notes
+
+Added 15 edge-case behavioral tests to
+`packages/coding-agent/test/todo-meteors.test.ts` (43 total, up from 28),
+covering `ember.ts`'s pure glyph/pulse/column math, `TodoMeteorState`'s
+phase-diffing/pruning, and the controller's dispose/remount lifecycle:
+
+- **Real bug found and fixed**: both `meteorGlyph` and `emberGlyph` had
+  the exact same missing-fallback shape Session Bonsai's `budGlyph` bug
+  established — `METEOR_GLYPHS[NaN]` / `EMBER_GLYPHS[NaN]` are `undefined`
+  for a `NaN` progress/brightness input, which would render the literal
+  string `"undefined"` into the ember horizon or meteor lane instead of
+  degrading to the dimmest glyph. Confirmed via a standalone repro before
+  touching source. Fixed both with the same `?? GLYPHS[0]` pattern
+  `waveGlyph`/`budGlyph` already use. `NaN` is reachable here in a way it
+  wasn't for Session Bonsai's growth fraction: `urgencyPulse` propagates a
+  `NaN` `elapsedMs` straight through `combineBrightness` into
+  `emberGlyph`, and a `NaN`-launched meteor's `meteorProgress` flows into
+  `meteorGlyph` — both now locked in by tests asserting the NaN case
+  matches `meteorGlyph(0)`/`emberGlyph(0)` rather than being `undefined`.
+- **`meteorColumn` is a distinct, deliberately-NOT-fixed case**: unlike the
+  two glyph lookups above, a `NaN` progress makes `meteorColumn` return
+  `NaN` too — but since it's used only as an array index
+  (`lane[meteorColumn(...)] = ...`), assigning at a `NaN` key lands on a
+  non-index property invisible to `Array.prototype.join`, silently
+  dropping that meteor from the rendered lane rather than corrupting it
+  with visible garbage text. No text-corruption risk, so left as
+  graceful degradation-by-design (same category as Tool Constellation's
+  grid-collision finding), not fixed. `meteorColumn` for a non-positive or
+  fractional lane width already clamped correctly to `0` pre-hardening.
+- **`urgencyPulse` bounds**: negative `attempt` or negative `maxAttempts`
+  both already returned `0` (the `attempt <= 0 || maxAttempts <= 0` guard
+  catches both), and `attempt` far exceeding `maxAttempts` already clamped
+  pressure to `1` via `Math.min(1, ...)` — both pre-existing guards, now
+  covered by tests rather than only a doc comment.
+- **`TodoMeteorState` edge cases**: an `applyPhases` call with an empty
+  phase list correctly clears every ember and resets `doneCount`/
+  `totalCount` to `0` (report `changed: true` on the transition); a
+  `completedTasks` entry naming a phase/content pair with no matching open
+  ember still spawns a meteor rather than silently dropping it (the
+  `#embers.delete(key)` miss is a no-op, not a guard that skips the
+  `#meteors.push`) — this is the correct shape since the engine's own
+  `getCompletionTransitions` diff is the ground truth, not a derived
+  ember-presence check; `pruneMeteors` on an already-empty list is a
+  no-op via its own `before === 0` early return, confirmed by a dedicated
+  test rather than only being implied by other tests' happy paths.
+- **Rendering an all-meteor, zero-ember, zero-total snapshot**: the
+  ember horizon correctly falls back to `"(no open todos)"` and the
+  off-tier text reports `"no todos"` (the `totalCount === 0` branch, not
+  `"0/0 done"`) even while a meteor is still mid-arc in the lane below —
+  the two rows are independently derived and don't need embers present
+  to render a meteor.
+- **Controller dispose/remount**: `dispose()` before any mount is a
+  silent no-op (matches every prior feature's pre-mount-guard finding); a
+  second `dispose()` after a real teardown emits no extra `setWidget`
+  call; and — the same shape Session Bonsai's hardening pass first
+  exercised — a `tool_result` arriving after `dispose()` correctly
+  remounts a fresh widget rather than staying dormant, since `#mount`
+  resets to `undefined` on teardown.
+
+Two real bugs found and fixed (`meteorGlyph(NaN)` and `emberGlyph(NaN)` →
+literal `"undefined"` in rendered output, the same class as Session
+Bonsai's `budGlyph`); every other edge case degraded gracefully by design.
+`bun test packages/coding-agent/test/todo-meteors.test.ts`: 43 pass, 0
+fail. Root `bun run check` green across all workspaces after the fix.

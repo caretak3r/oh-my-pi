@@ -475,4 +475,117 @@ describe("todo meteors controller", () => {
 		expect(calls[calls.length - 1].content).toBeUndefined();
 		expect(scheduler.running).toBe(false);
 	});
+
+	it("dispose is idempotent and a pre-mount dispose is a no-op", () => {
+		const controller = new TodoMeteorsController();
+		const { ctx, calls } = recordingContext();
+
+		// Never mounted — dispose must not call setWidget at all.
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(0);
+
+		controller.onToolResult(
+			toolResult({ phases: [{ name: "Phase 1", tasks: [{ content: "a", status: "pending" }] }] }),
+			ctx,
+		);
+		controller.dispose(ctx);
+		const afterFirstDispose = calls.length;
+		controller.dispose(ctx);
+		expect(calls).toHaveLength(afterFirstDispose);
+	});
+
+	it("remounts after dispose on the next event rather than staying dormant", () => {
+		const controller = new TodoMeteorsController();
+		const { ctx, calls } = recordingContext();
+
+		controller.onToolResult(
+			toolResult({ phases: [{ name: "Phase 1", tasks: [{ content: "a", status: "pending" }] }] }),
+			ctx,
+		);
+		controller.dispose(ctx);
+		const beforeRemount = calls.length;
+		controller.onToolResult(
+			toolResult({ phases: [{ name: "Phase 1", tasks: [{ content: "b", status: "pending" }] }] }),
+			ctx,
+		);
+		expect(calls.length).toBeGreaterThan(beforeRemount);
+		expect(calls[calls.length - 1].content).not.toBeUndefined();
+	});
+});
+
+describe("todo meteors hardening edge cases", () => {
+	it("meteorGlyph and emberGlyph fall back to the dimmest glyph for NaN rather than rendering undefined", () => {
+		expect(meteorGlyph(Number.NaN)).toBe(meteorGlyph(0));
+		expect(emberGlyph(Number.NaN)).toBe(emberGlyph(0));
+	});
+
+	it("meteorProgress and meteorDone propagate NaN for a non-finite launch timestamp rather than throwing", () => {
+		expect(Number.isNaN(meteorProgress(Number.NaN, 100))).toBe(true);
+		// NaN comparisons are always false, so a NaN-launched meteor is never
+		// reported done — it would linger forever rather than crash; pruneMeteors
+		// (state.ts) is unaffected in practice since launchedAt is always a real
+		// scheduler reading, never a caller-supplied NaN.
+		expect(meteorDone(Number.NaN, 100)).toBe(false);
+	});
+
+	it("meteorColumn clamps to 0 for non-positive/fractional widths and never throws", () => {
+		expect(meteorColumn(0.5, 0)).toBe(0);
+		expect(meteorColumn(0.5, -5)).toBe(0);
+	});
+
+	it("meteorColumn is NaN for NaN progress, which drops the meteor from the rendered lane rather than corrupting it", () => {
+		const column = meteorColumn(Number.NaN, 24);
+		expect(Number.isNaN(column)).toBe(true);
+		const lane = new Array<string>(24).fill(" ");
+		lane[column] = meteorGlyph(Number.NaN);
+		// Assigning at a NaN key lands on a non-index property, invisible to join().
+		expect(lane.join("")).toBe(" ".repeat(24));
+	});
+
+	it("urgencyPulse is 0 for negative attempt/maxAttempts and clamps pressure above 1 rather than exceeding it", () => {
+		expect(urgencyPulse(-1, 3, 0)).toBe(0);
+		expect(urgencyPulse(3, -1, 0)).toBe(0);
+		expect(urgencyPulse(999, 3, 0)).toBeLessThanOrEqual(1);
+	});
+
+	it("urgencyPulse and combineBrightness produce a finite, glyph-safe result even for a NaN elapsed clock", () => {
+		const pulse = urgencyPulse(1, 3, Number.NaN);
+		expect(Number.isNaN(pulse)).toBe(true);
+		const combined = combineBrightness(emberRestBrightness("pending"), pulse);
+		expect(Number.isNaN(combined)).toBe(true);
+		// The NaN flows all the way to emberGlyph, but the fallback above keeps
+		// this from ever rendering the literal string "undefined".
+		expect(emberGlyph(combined)).toBe(emberGlyph(0));
+	});
+
+	it("applyPhases on an empty phase list clears every ember and reports done/total as 0", () => {
+		const state = new TodoMeteorState();
+		state.applyPhases([{ name: "Phase 1", tasks: [{ content: "a", status: "pending" }] }], [], 0);
+		const changed = state.applyPhases([], [], 100);
+		expect(changed).toBe(true);
+		const snap = state.snapshot();
+		expect(snap.embers).toHaveLength(0);
+		expect(snap.doneCount).toBe(0);
+		expect(snap.totalCount).toBe(0);
+	});
+
+	it("a completedTasks entry with no matching open ember still spawns a meteor (no crash on delete-miss)", () => {
+		const state = new TodoMeteorState();
+		const changed = state.applyPhases([], [{ phase: "Phase 1", content: "ghost" }], 0);
+		expect(changed).toBe(true);
+		expect(state.snapshot().meteors).toHaveLength(1);
+	});
+
+	it("pruneMeteors on an already-empty meteor list is a no-op that reports no change", () => {
+		const state = new TodoMeteorState();
+		expect(state.pruneMeteors(1_000_000)).toBe(false);
+	});
+
+	it("renderTodoMeteorsRow tolerates a snapshot with meteors but zero embers and zero total count", () => {
+		const state = new TodoMeteorState();
+		state.applyPhases([], [{ phase: "Phase 1", content: "a" }], 0);
+		const lines = renderTodoMeteorsRow(state.snapshot(), 100, idTheme, "full");
+		expect(lines[0]).toBe("(no open todos)");
+		expect(renderTodoMeteorsOffText(state.snapshot())).toBe("no todos");
+	});
 });
