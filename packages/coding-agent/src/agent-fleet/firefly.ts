@@ -101,5 +101,5 @@ const FIREFLY_GLYPHS = ["·", "∘", "✧", "✦"] as const;
 export function fireflyGlyph(brightness: number): string {
 	const clamped = clamp01(brightness);
 	const index = Math.min(FIREFLY_GLYPHS.length - 1, Math.floor(clamped * FIREFLY_GLYPHS.length));
-	return FIREFLY_GLYPHS[index];
+	return FIREFLY_GLYPHS[index] ?? FIREFLY_GLYPHS[0];
 }

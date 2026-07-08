@@ -369,24 +369,25 @@ describe("agent fleet widget lifecycle", () => {
 	});
 });
 
-describe("agent fleet controller", () => {
-	function recordingContext(overrides: Partial<AgentFleetContext> = {}): {
-		ctx: AgentFleetContext;
-		calls: Array<{ key: string; content: unknown }>;
-	} {
-		const calls: Array<{ key: string; content: unknown }> = [];
-		const ctx: AgentFleetContext = {
-			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
-			theme: idTheme,
-			setWidget: (key, content) => calls.push({ key, content }),
-			...overrides,
-		};
-		return { ctx, calls };
-	}
+/** Shared by "agent fleet controller" and the hardening describe block below. */
+function recordingContext(overrides: Partial<AgentFleetContext> = {}): {
+	ctx: AgentFleetContext;
+	calls: Array<{ key: string; content: unknown }>;
+} {
+	const calls: Array<{ key: string; content: unknown }> = [];
+	const ctx: AgentFleetContext = {
+		hasUI: true,
+		isTTY: true,
+		env: {},
+		motionSetting: "full",
+		theme: idTheme,
+		setWidget: (key, content) => calls.push({ key, content }),
+		...overrides,
+	};
+	return { ctx, calls };
+}
 
+describe("agent fleet controller", () => {
 	it("watch() subscribes exactly once to the registry, and stays dormant with no UI surface", () => {
 		const registry = fakeRegistry();
 		const controller = new AgentFleetController({ registry });
@@ -488,5 +489,139 @@ describe("agent fleet controller", () => {
 		const { ctx, calls } = recordingContext();
 		controller.dispose(ctx);
 		expect(calls).toHaveLength(0);
+	});
+});
+
+describe("agent fleet hardening: adversarial/non-finite inputs", () => {
+	it("fireflyGlyph(NaN) falls back to the dimmest glyph instead of returning undefined (fixed bug)", () => {
+		expect(fireflyGlyph(Number.NaN)).toBe(fireflyGlyph(0));
+		expect(fireflyGlyph(Number.NaN)).not.toBeUndefined();
+	});
+
+	it("fireflyGlyph clamps +/-Infinity to the ends of the ramp instead of index-overflowing", () => {
+		expect(fireflyGlyph(Number.POSITIVE_INFINITY)).toBe(fireflyGlyph(1));
+		expect(fireflyGlyph(Number.NEGATIVE_INFINITY)).toBe(fireflyGlyph(0));
+	});
+
+	it("workingBrightness(NaN) propagates NaN (a bad clock reading), never crashing the caller", () => {
+		expect(workingBrightness(Number.NaN)).toBeNaN();
+		// The renderer's NaN-brightness path is covered end-to-end by the "renders NaN-driven brightness
+		// without emitting 'undefined'" test below, now that fireflyGlyph has a bounds-safe fallback.
+	});
+
+	it("isPrunable never prunes on a NaN elapsed reading (a bad clock leaves a firefly lingering, not silently vanishing)", () => {
+		expect(isPrunable("done", Number.NaN)).toBe(false);
+		expect(isPrunable("failed", Number.NaN)).toBe(false);
+		expect(isPrunable("working", Number.NaN)).toBe(false);
+	});
+
+	it("driftSeed is defined and stable for an empty agent id", () => {
+		expect(driftSeed("")).toBe(driftSeed(""));
+		expect(driftSeed("")).toBeGreaterThanOrEqual(0);
+		expect(driftSeed("")).toBeLessThan(1);
+	});
+
+	it("wobblePhase falls back to center on NaN seed or elapsed time rather than throwing", () => {
+		expect(wobblePhase(Number.NaN, 100)).toBe(0);
+		expect(wobblePhase(0.5, Number.NaN)).toBe(0);
+	});
+
+	it("renderAgentFleetRow never emits the literal string 'undefined' even when brightness math goes NaN", () => {
+		const state = new AgentFleetState();
+		state.applyRegistryEvent(event("registered", "a1"), Number.NaN);
+		const row = renderAgentFleetRow(state.snapshot(), Number.NaN, idTheme, "full")[0];
+		expect(row).not.toContain("undefined");
+	});
+
+	it("pruneFireflies with a NaN elapsedMs (bad clock) doesn't crash and reports no pruning", () => {
+		const state = new AgentFleetState();
+		state.applyRegistryEvent(event("registered", "a1"), 0);
+		state.applyRegistryEvent(event("status_changed", "a1", { status: "idle" }), 0);
+		expect(state.pruneFireflies(Number.NaN)).toBe(false);
+		expect(state.snapshot().fireflies).toHaveLength(1);
+	});
+
+	it("a displayName-only change updates the name without touching status or statusChangedAt", () => {
+		const state = new AgentFleetState();
+		state.applyRegistryEvent(event("registered", "a1", { displayName: "old" }), 0);
+		expect(state.applyRegistryEvent(event("status_changed", "a1", { displayName: "new" }), 500)).toBe(true);
+		expect(state.snapshot().fireflies[0]).toMatchObject({
+			displayName: "new",
+			status: "working",
+			statusChangedAt: 0,
+		});
+	});
+
+	it("removing an already-removed id is a no-op the second time", () => {
+		const state = new AgentFleetState();
+		state.applyRegistryEvent(event("registered", "a1"), 0);
+		expect(state.applyRegistryEvent(event("removed", "a1"), 1)).toBe(true);
+		expect(state.applyRegistryEvent(event("removed", "a1"), 2)).toBe(false);
+	});
+
+	it("renderAgentFleetOffText tallies all three buckets together when every status is present", () => {
+		const state = new AgentFleetState();
+		state.applyRegistryEvent(event("registered", "a1"), 0);
+		state.applyRegistryEvent(event("registered", "a2"), 0);
+		state.applyRegistryEvent(event("status_changed", "a2", { status: "idle" }), 0);
+		state.applyRegistryEvent(event("registered", "a3"), 0);
+		state.applyRegistryEvent(event("status_changed", "a3", { status: "aborted" }), 0);
+		expect(renderAgentFleetOffText(state.snapshot(), idTheme)).toBe("1 working · 1 done · 1 failed");
+	});
+
+	it("renders exactly at the display cap with no '+N' trailer, and '+1' just past it", () => {
+		const state = new AgentFleetState();
+		for (let i = 0; i < 12; i++) state.applyRegistryEvent(event("registered", `a${i}`), 0);
+		const atCap = renderAgentFleetRow(state.snapshot(), 0, idTheme, "subtle")[0];
+		expect(atCap).not.toContain("+");
+
+		state.applyRegistryEvent(event("registered", "a12"), 0);
+		const pastCap = renderAgentFleetRow(state.snapshot(), 0, idTheme, "subtle")[0];
+		expect(pastCap).toContain("+1");
+	});
+
+	it("controller dispose() is idempotent — calling it twice doesn't double-clear the widget or throw", () => {
+		const scheduler = manualScheduler();
+		const registry = fakeRegistry();
+		const controller = new AgentFleetController({ registry, scheduler });
+		const { ctx, calls } = recordingContext();
+		controller.watch(ctx);
+		registry.emit(event("registered", "a1"));
+		const callsAfterMount = calls.length;
+
+		controller.dispose(ctx);
+		const callsAfterFirstDispose = calls.length;
+		expect(() => controller.dispose(ctx)).not.toThrow();
+		expect(calls.length).toBe(callsAfterFirstDispose);
+		expect(callsAfterFirstDispose).toBe(callsAfterMount + 1);
+	});
+
+	it("watch() resubscribes and can remount after a prior dispose() (recovers from a stop/restart cycle)", () => {
+		const registry = fakeRegistry();
+		const controller = new AgentFleetController({ registry });
+		const { ctx, calls } = recordingContext();
+		controller.watch(ctx);
+		registry.emit(event("registered", "a1"));
+		controller.dispose(ctx);
+		expect(controller.watching).toBe(false);
+
+		controller.watch(ctx);
+		expect(controller.watching).toBe(true);
+		expect(registry.listenerCount).toBe(1);
+		registry.emit(event("registered", "a2"));
+		expect(calls[calls.length - 1].content).not.toBeUndefined();
+	});
+
+	it("widget dispose() is idempotent — double dispose doesn't throw or double-unsubscribe", () => {
+		const scheduler = manualScheduler();
+		const policy = new MotionPolicy(fullEnv, "full");
+		const host = new AnimationHost({ policy, scheduler });
+		const state = new AgentFleetState();
+		state.applyRegistryEvent(event("registered", "a1"), 0);
+		const widget = new AgentFleetWidget({ tui: noopTui, host, policy, state, theme: idTheme, clock: scheduler });
+		widget.dispose();
+		expect(host.subscriberCount).toBe(0);
+		expect(() => widget.dispose()).not.toThrow();
+		expect(host.subscriberCount).toBe(0);
 	});
 });

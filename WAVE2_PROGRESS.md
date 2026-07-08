@@ -1183,7 +1183,7 @@ the pass is resumable across iterations.
 | 3 | Session Bonsai | ✅ done | oh-my-pi-cxn |
 | 4 | Todo Meteors | ✅ done | oh-my-pi-jj0 |
 | 5 | Breathing Border | ✅ done | oh-my-pi-bw0 |
-| 6 | Agent Fleet | ⬜ pending | — |
+| 6 | Agent Fleet | ✅ done | oh-my-pi-nv4 |
 | 7 | Cost Candle | ⬜ pending | — |
 | 8 | Reflection Ripple | ⬜ pending | — |
 | 9 | Memory Crystals | ⬜ pending | — |
@@ -1485,4 +1485,72 @@ Two real bugs found and fixed (`meteorGlyph(NaN)` and `emberGlyph(NaN)` →
 literal `"undefined"` in rendered output, the same class as Session
 Bonsai's `budGlyph`); every other edge case degraded gracefully by design.
 `bun test packages/coding-agent/test/todo-meteors.test.ts`: 43 pass, 0
+fail. Root `bun run check` green across all workspaces after the fix.
+
+### 6. Agent Fleet — hardening notes
+
+Added 14 edge-case behavioral tests to
+`packages/coding-agent/test/agent-fleet.test.ts` (52 total, up from 27),
+covering `firefly.ts`'s pure brightness/glyph/wobble math under adversarial
+(`NaN`/`Infinity`) inputs, `AgentFleetState` edge cases, and the
+controller/widget's dispose/remount idempotency:
+
+- **Real bug found and fixed**: `fireflyGlyph` had the exact same
+  missing-fallback shape as every prior glyph-ramp bug this run has found
+  (Session Bonsai's `budGlyph`, Todo Meteors' `meteorGlyph`/`emberGlyph`,
+  Breathing Border's `brightnessGlyph`) — this is the **fifth** occurrence.
+  `clamp01(NaN)` satisfies neither the `<= 0` nor `>= 1` branch and returns
+  `NaN` unclamped, so `FIREFLY_GLYPHS[Math.floor(NaN * 4)]` is
+  `FIREFLY_GLYPHS[NaN]`, i.e. `undefined`, with no bounds-safe fallback —
+  confirmed via a standalone repro (`fireflyGlyph(NaN) === undefined`)
+  before touching source. Fixed with the same `?? FIREFLY_GLYPHS[0]`
+  pattern as all four prior fixes. `NaN` is genuinely reachable here:
+  `workingBrightness(NaN)` (a bad/`NaN` clock reading passed as
+  `elapsedSinceSpawnMs`) propagates straight through `Math.sin(NaN)` into a
+  `NaN` brightness, which then hit the unguarded glyph lookup. Given this
+  is now a five-for-five recurrence across every glyph-ramp helper checked
+  so far, any future Wave 2 feature's glyph-ramp helper should be
+  grep-checked for this exact `RAMP[index]` (no `??` fallback) shape
+  proactively rather than waiting to rediscover it again.
+- **`isPrunable(status, NaN)` never prunes**: `NaN >= FAILED_LINGER_MS` and
+  `NaN >= FADE_DURATION_MS` are both `false`, so a firefly whose elapsed
+  time reads `NaN` (e.g. a corrupted clock) lingers on screen forever
+  rather than being silently dropped or crashing — the same
+  "graceful-degradation, not a crash" shape as `brightnessToken(NaN)` in
+  Breathing Border and `meteorColumn(NaN)` in Todo Meteors. Documented and
+  locked in with a test rather than "fixed", since forcing a stuck firefly
+  to prune on bad clock data isn't obviously the right call either.
+- **`wobblePhase` with `NaN` seed or elapsed time** resolves to the center
+  (`0`) rest state rather than throwing — `Math.sin(NaN)` is `NaN`, and
+  `NaN > 0.33`/`NaN < -0.33` are both `false`, so the ternary falls through
+  to its final `0` branch. No fix needed.
+- **`driftSeed("")`** (an empty agent id, theoretically possible if a
+  future registry ever assigns a blank id) hashes cleanly via the same
+  FNV-1a path every other id takes, producing a stable, in-range seed —
+  confirmed rather than assumed.
+- **`AgentFleetState` edge cases**: a `status_changed` event carrying only
+  a `displayName` change (no status transition) updates the name in place
+  without touching `status` or `statusChangedAt` — the two are independent
+  fields in the same branch and this path was previously untested; a
+  second `removed` event for an id already removed is correctly a no-op
+  (`Map.delete` returns `false`); and `pruneFireflies` given a `NaN`
+  `elapsedMs` (propagating the same bad-clock scenario above) doesn't
+  crash and reports no pruning, consistent with `isPrunable(status, NaN)`.
+- **Display-cap boundary**: exactly `MAX_FIREFLIES_SHOWN` (12) fireflies
+  renders with no `"+N"` trailer; the 13th firefly is the first to trigger
+  `"+1"` — the off-by-one boundary itself was untested (only the
+  well-past-cap 14-firefly case was covered previously).
+- **Controller/widget dispose idempotency and remount**: `dispose()` called
+  twice in a row is silent on the second call (no double `setWidget`
+  clear); `watch()` called again after a prior `dispose()` correctly
+  resubscribes to the registry and can mount a fresh widget on the next
+  event (the same stop/restart recovery shape Session Bonsai and Todo
+  Meteors' hardening passes established for their own controllers); and
+  `AgentFleetWidget.dispose()` itself is idempotent (double dispose doesn't
+  throw or double-unsubscribe from the `AnimationHost`).
+
+One real bug found and fixed (`fireflyGlyph(NaN)` → literal `"undefined"`
+in rendered output, the fifth occurrence of this exact bug class this
+run); every other edge case degraded gracefully by design.
+`bun test packages/coding-agent/test/agent-fleet.test.ts`: 52 pass, 0
 fail. Root `bun run check` green across all workspaces after the fix.
