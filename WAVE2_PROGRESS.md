@@ -111,7 +111,56 @@ settings-schema entries.
 
 ## 3. 🌳 Session Bonsai (oh-my-pi-y91)
 
-**Status:** not started.
+**Status:** done.
+
+**Module:** `packages/coding-agent/src/session-bonsai/` (`tree.ts`,
+`growth.ts`, `state.ts`, `widget.ts`, `controller.ts`, `index.ts`).
+
+**Wiring:** `createSessionBonsaiExtension` pushed as an inline extension in
+`sdk.ts` (`createAgentSession`), subscribed to `session_branch` /
+`session_tree`. Neither event payload carries the tree itself (just a signal
+that it, or the active leaf, changed), so the controller re-derives it each
+time from `ctx.sessionManager.getTree()` / `getLeafId()`. Reuses the existing
+shared `animations` setting; no new settings-schema entries.
+
+**Test command:** `bun test packages/coding-agent/test/session-bonsai.test.ts`
+— 32 pass, 0 fail.
+
+**`bun check`:** green (root `bun check`, all workspaces).
+
+**Design decisions / scoped interpretations:**
+- `getTree()` returns the full entry-level tree (one `SessionTreeNode` per
+  message, not per branch), so `tree.ts`'s `buildBonsaiTree` collapses every
+  linear single-child run down to an edge — surviving nodes are exactly the
+  session's real branch points and leaves. This is what makes "graceful past
+  ~5 branches" a leaf-count problem rather than a message-count one.
+- `tree.ts` operates on a minimal `RawTreeNode { id, children }` shape,
+  decoupled from the real `SessionTreeNode`/`SessionEntry` union (mirroring
+  Tool Constellation's `sky.ts` decoupling from tool-name types) so the
+  collapsing/pruning/rank math is independently testable with plain literal
+  objects; the controller adapts the real tree at the call site.
+- Spawn timestamps (driving the ~1s unfurl) and the widget's render clock
+  both read the same injected `FrameScheduler`, not the `AnimationHost`'s
+  internal relative elapsed-ms — same rationale as Tool Constellation/Token
+  Tide: the host only drives repaint cadence, so growth math stays correct
+  regardless of when the UI layer invokes the widget factory.
+- The very first `BonsaiState.update()` call seeds every observed node as an
+  already-grown baseline (spawn stamped `UNFURL_DURATION_MS` in the past)
+  rather than animating an unfurl — resuming a session that already has
+  branches shouldn't replay their growth on mount. Only branches that appear
+  in a *later* update genuinely unfurl.
+- Pruning past `MAX_DISPLAYED_LEAVES` (5) always keeps the active leaf, then
+  fills the remaining budget with the most-recently-spawned other leaves
+  (ties broken by original left-to-right order for determinism), preserving
+  every kept leaf's ancestors so the remaining tree shape stays legible. A
+  trailing `⋯ +N more` line reports what's hidden — never a silent drop.
+- Tip "shimmer" (active leaf) and bud-growth glyphs use a small local glyph
+  ramp (`.`/`o`/`0` while unfurling, `✦` resting, `❋` mid-shimmer-blip)
+  rather than reusing Tool Constellation's star glyphs — different visual
+  vocabulary for a different metaphor, deliberately not shared.
+- Like `retry-radar`/Tool Constellation/Token Tide, `backpressureFromTui(tui)`
+  is not wired into the `AnimationHost` construction (same structural mount-
+  sequence property, not a regression here).
 
 ## 4. ☄️ Todo Meteors (oh-my-pi-060)
 

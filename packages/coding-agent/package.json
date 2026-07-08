@@ -512,6 +512,14 @@
       "types": "./src/secrets/*.ts",
       "import": "./src/secrets/*.ts"
     },
+    "./session-bonsai": {
+      "types": "./src/session-bonsai/index.ts",
+      "import": "./src/session-bonsai/index.ts"
+    },
+    "./session-bonsai/*": {
+      "types": "./src/session-bonsai/*.ts",
+      "import": "./src/session-bonsai/*.ts"
+    },
     "./session/*": {
       "types": "./src/session/*.ts",
       "import": "./src/session/*.ts"
