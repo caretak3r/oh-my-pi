@@ -8,6 +8,8 @@
 ### Added
 
 - Compaction Vacuum: auto-compaction now plays an in-place condense animation (older transcript flowing into a summary node) instead of an opaque freeze, and settles with a real before→after token count and a "kept" caption (e.g. `Auto context-full · 142k → 38k (−104k, kept goals, open files, TODOs)`). Rides the shared `@oh-my-pi/pi-animation` kit and is gated by a new `display.animations` setting (`full`/`subtle`/`off`); the static loader remains the fallback for `off`, non-TTY, CI, `NO_COLOR`, or renderer backpressure. Aborted/skipped/failed compactions never claim a reclaimed number.
+- Added Retry Radar: a draining countdown ring shown during auto-retry backoff (attempt count + short reason, e.g. `retry 2/5 · 429 · 8s`), settling green on recovery and red on give-up. Built on the shared `@oh-my-pi/pi-animation` kit; gated by the new `animations` setting and forced to a single static status line outside a TTY (or under `NO_COLOR`/`CI`/dumb terminals).
+- Added an `animations` setting (`off` | `subtle` | `full`) controlling the motion tier for ambient animated widgets.
 
 ## [16.3.11] - 2026-07-06
 

@@ -885,6 +885,24 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	animations: {
+		type: "enum",
+		values: ["off", "subtle", "full"] as const,
+		default: "full",
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Ambient Animations",
+			description:
+				"Motion tier for ambient animated widgets (e.g. the auto-retry countdown ring). off: static text; subtle: reduced cadence; full: smooth. Always forced off outside a TTY or under NO_COLOR/CI/dumb terminals.",
+			options: [
+				{ value: "off", label: "Off", description: "No motion; render one static frame" },
+				{ value: "subtle", label: "Subtle", description: "Reduced cadence (~12fps)" },
+				{ value: "full", label: "Full", description: "Smooth cadence (~30fps)" },
+			],
+		},
+	},
+
 	"display.smoothStreaming": {
 		type: "boolean",
 		default: true,
