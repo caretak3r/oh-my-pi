@@ -228,10 +228,17 @@ Local-only slash commands may emit `command_output` frames before completing via
   "contextUsage": {
     "tokens": 1100,
     "contextWindow": 200000,
-    "percent": 0.55
+    "percent": 0.55,
+    "compactionThresholdTokens": 170000,
+    "tokensUntilCompaction": 168900
   }
 }
 ```
+
+`compactionThresholdTokens` (the token count at which auto-compaction fires) and
+`tokensUntilCompaction` (`compactionThresholdTokens - tokens`, negative once the
+threshold is passed) are omitted when there is no known context window or
+auto-compaction is disabled/`off`.
 
 ### `set_todos` payload
 

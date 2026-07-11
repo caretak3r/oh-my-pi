@@ -283,6 +283,19 @@ export interface ContextUsage {
 	contextWindow: number;
 	/** Context usage as percentage of context window. */
 	percent: number;
+	/**
+	 * Token count at which auto-compaction fires for the active model+settings,
+	 * computed from the same threshold resolver the runtime uses. Undefined when
+	 * auto-compaction is disabled/off or no context window is known — extensions
+	 * must treat it as "no forecast", not a guess.
+	 */
+	compactionThresholdTokens?: number;
+	/**
+	 * Tokens remaining before auto-compaction triggers
+	 * (`compactionThresholdTokens - tokens`). Negative once the threshold is
+	 * already exceeded. Undefined whenever {@link compactionThresholdTokens} is.
+	 */
+	tokensUntilCompaction?: number;
 }
 
 export interface CompactOptions {
