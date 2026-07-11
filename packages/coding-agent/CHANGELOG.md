@@ -5,6 +5,9 @@
 ### Changed
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.
+### Added
+
+- Compaction Vacuum: auto-compaction now plays an in-place condense animation (older transcript flowing into a summary node) instead of an opaque freeze, and settles with a real before→after token count and a "kept" caption (e.g. `Auto context-full · 142k → 38k (−104k, kept goals, open files, TODOs)`). Rides the shared `@oh-my-pi/pi-animation` kit and is gated by a new `display.animations` setting (`full`/`subtle`/`off`); the static loader remains the fallback for `off`, non-TTY, CI, `NO_COLOR`, or renderer backpressure. Aborted/skipped/failed compactions never claim a reclaimed number.
 
 ## [16.3.11] - 2026-07-06
 

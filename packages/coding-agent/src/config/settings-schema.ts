@@ -896,6 +896,23 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"display.animations": {
+		type: "enum",
+		values: ["full", "subtle", "off"] as const,
+		default: "full",
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Animations",
+			description: "Motion for ambient animated widgets (e.g. the compaction condense animation)",
+			options: [
+				{ value: "full", label: "Full", description: "Full-cadence motion (~30fps)" },
+				{ value: "subtle", label: "Subtle", description: "Reduced-cadence motion (~12fps)" },
+				{ value: "off", label: "Off", description: "No motion; static fallback rendering" },
+			],
+		},
+	},
+
 	"display.showTokenUsage": {
 		type: "boolean",
 		default: false,

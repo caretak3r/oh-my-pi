@@ -557,6 +557,8 @@ images:
   blockImages: false
 tui:
   hyperlinks: auto           # off, auto, always
+display:
+  animations: full           # full, subtle, off
 ```
 
 | Key | Type | Default | Values |
@@ -575,6 +577,7 @@ tui:
 | `images.autoResize` | boolean | `true` | Resize large images for model compatibility. |
 | `images.blockImages` | boolean | `false` | Never send images to providers. |
 | `tui.hyperlinks` | enum | `auto` | `off`, `auto`, `always`. |
+| `display.animations` | enum | `full` | `full`, `subtle`, `off`. Motion for ambient animated widgets (e.g. the compaction condense animation). `off` and non-TTY/CI/`NO_COLOR`/backpressure always fall back to a static frame regardless of setting. |
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`.
 
