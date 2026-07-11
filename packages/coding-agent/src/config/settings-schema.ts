@@ -941,7 +941,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "appearance",
 			group: "Display",
 			label: "Animations",
-			description: "Motion for ambient animated widgets (e.g. the compaction condense animation, auto-retry countdown ring)",
+			description:
+				"Motion tier for ambient animated widgets (e.g. the compaction condense animation, auto-retry countdown ring, tool constellation star map). off: static text; subtle: reduced cadence (~12fps); full: smooth (~30fps). Always forced off outside a TTY or under NO_COLOR/CI/dumb terminals.",
 			options: [
 				{ value: "full", label: "Full", description: "Full-cadence motion (~30fps)" },
 				{ value: "subtle", label: "Subtle", description: "Reduced-cadence motion (~12fps)" },

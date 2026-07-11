@@ -1,0 +1,45 @@
+import type { MotionSetting } from "@oh-my-pi/pi-animation";
+import { settings } from "../config/settings";
+import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { type SessionBonsaiContext, SessionBonsaiController } from "./controller";
+
+export * from "./controller";
+export * from "./growth";
+export * from "./state";
+export * from "./tree";
+export * from "./widget";
+
+function readMotionSetting(): MotionSetting {
+	const value = settings.get("animations");
+	return value === "off" || value === "subtle" || value === "full" ? value : "full";
+}
+
+function toBonsaiContext(ctx: ExtensionContext): SessionBonsaiContext {
+	return {
+		hasUI: ctx.hasUI,
+		isTTY: process.stdout.isTTY === true,
+		env: Bun.env,
+		motionSetting: readMotionSetting(),
+		theme: ctx.ui.theme,
+		sessionManager: ctx.sessionManager,
+		setWidget: (key, content, options) => ctx.ui.setWidget(key, content, options),
+	};
+}
+
+/**
+ * Session Bonsai: the session's branch history as a small living bonsai.
+ * Branching sprouts a new limb that unfurls over ~1s; the active path glows
+ * and its tip shimmers; abandoned branches fade to dim bare twigs. Built on
+ * the shared `@oh-my-pi/pi-animation` kit: one `AnimationHost` for the whole
+ * session, mounted on the first `session_branch`/`session_tree` event and
+ * disposed only if the extension itself is torn down.
+ */
+export const createSessionBonsaiExtension: ExtensionFactory = api => {
+	const controller = new SessionBonsaiController();
+	api.on("session_branch", (event, ctx) => {
+		controller.onSessionBranch(event, toBonsaiContext(ctx));
+	});
+	api.on("session_tree", (event, ctx) => {
+		controller.onSessionTree(event, toBonsaiContext(ctx));
+	});
+};

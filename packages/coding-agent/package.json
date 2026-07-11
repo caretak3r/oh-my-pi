@@ -120,6 +120,14 @@
       "types": "./src/*.ts",
       "import": "./src/*.ts"
     },
+    "./agent-fleet": {
+      "types": "./src/agent-fleet/index.ts",
+      "import": "./src/agent-fleet/index.ts"
+    },
+    "./agent-fleet/*": {
+      "types": "./src/agent-fleet/*.ts",
+      "import": "./src/agent-fleet/*.ts"
+    },
     "./async": {
       "types": "./src/async/index.ts",
       "import": "./src/async/index.ts"
@@ -139,6 +147,22 @@
     "./autoresearch/tools/*": {
       "types": "./src/autoresearch/tools/*.ts",
       "import": "./src/autoresearch/tools/*.ts"
+    },
+    "./breathing-border": {
+      "types": "./src/breathing-border/index.ts",
+      "import": "./src/breathing-border/index.ts"
+    },
+    "./breathing-border/*": {
+      "types": "./src/breathing-border/*.ts",
+      "import": "./src/breathing-border/*.ts"
+    },
+    "./cadence-equalizer": {
+      "types": "./src/cadence-equalizer/index.ts",
+      "import": "./src/cadence-equalizer/index.ts"
+    },
+    "./cadence-equalizer/*": {
+      "types": "./src/cadence-equalizer/*.ts",
+      "import": "./src/cadence-equalizer/*.ts"
     },
     "./capability": {
       "types": "./src/capability/index.ts",
@@ -171,6 +195,22 @@
     "./commit": {
       "types": "./src/commit/index.ts",
       "import": "./src/commit/index.ts"
+    },
+    "./cost-candle": {
+      "types": "./src/cost-candle/index.ts",
+      "import": "./src/cost-candle/index.ts"
+    },
+    "./cost-candle/*": {
+      "types": "./src/cost-candle/*.ts",
+      "import": "./src/cost-candle/*.ts"
+    },
+    "./reflection-ripple": {
+      "types": "./src/reflection-ripple/index.ts",
+      "import": "./src/reflection-ripple/index.ts"
+    },
+    "./reflection-ripple/*": {
+      "types": "./src/reflection-ripple/*.ts",
+      "import": "./src/reflection-ripple/*.ts"
     },
     "./commit/*": {
       "types": "./src/commit/*.ts",
@@ -228,6 +268,14 @@
       "types": "./src/config/*.ts",
       "import": "./src/config/*.ts"
     },
+    "./context-constellation": {
+      "types": "./src/context-constellation/index.ts",
+      "import": "./src/context-constellation/index.ts"
+    },
+    "./context-constellation/*": {
+      "types": "./src/context-constellation/*.ts",
+      "import": "./src/context-constellation/*.ts"
+    },
     "./dap": {
       "types": "./src/dap/index.ts",
       "import": "./src/dap/index.ts"
@@ -243,6 +291,14 @@
     "./debug/*": {
       "types": "./src/debug/*.ts",
       "import": "./src/debug/*.ts"
+    },
+    "./diff-bloom": {
+      "types": "./src/diff-bloom/index.ts",
+      "import": "./src/diff-bloom/index.ts"
+    },
+    "./diff-bloom/*": {
+      "types": "./src/diff-bloom/*.ts",
+      "import": "./src/diff-bloom/*.ts"
     },
     "./discovery": {
       "types": "./src/discovery/index.ts",
@@ -348,6 +404,14 @@
       "types": "./src/extensibility/plugins/marketplace/*.ts",
       "import": "./src/extensibility/plugins/marketplace/*.ts"
     },
+    "./goal-horizon": {
+      "types": "./src/goal-horizon/index.ts",
+      "import": "./src/goal-horizon/index.ts"
+    },
+    "./goal-horizon/*": {
+      "types": "./src/goal-horizon/*.ts",
+      "import": "./src/goal-horizon/*.ts"
+    },
     "./internal-urls": {
       "types": "./src/internal-urls/index.ts",
       "import": "./src/internal-urls/index.ts"
@@ -423,6 +487,30 @@
     "./memory-backend/*": {
       "types": "./src/memory-backend/*.ts",
       "import": "./src/memory-backend/*.ts"
+    },
+    "./memory-crystals": {
+      "types": "./src/memory-crystals/index.ts",
+      "import": "./src/memory-crystals/index.ts"
+    },
+    "./memory-crystals/*": {
+      "types": "./src/memory-crystals/*.ts",
+      "import": "./src/memory-crystals/*.ts"
+    },
+    "./model-weather-vane": {
+      "types": "./src/model-weather-vane/index.ts",
+      "import": "./src/model-weather-vane/index.ts"
+    },
+    "./model-weather-vane/*": {
+      "types": "./src/model-weather-vane/*.ts",
+      "import": "./src/model-weather-vane/*.ts"
+    },
+    "./prompt-charge": {
+      "types": "./src/prompt-charge/index.ts",
+      "import": "./src/prompt-charge/index.ts"
+    },
+    "./prompt-charge/*": {
+      "types": "./src/prompt-charge/*.ts",
+      "import": "./src/prompt-charge/*.ts"
     },
     "./hindsight": {
       "types": "./src/hindsight/index.ts",
@@ -521,6 +609,14 @@
       "types": "./src/secrets/*.ts",
       "import": "./src/secrets/*.ts"
     },
+    "./session-bonsai": {
+      "types": "./src/session-bonsai/index.ts",
+      "import": "./src/session-bonsai/index.ts"
+    },
+    "./session-bonsai/*": {
+      "types": "./src/session-bonsai/*.ts",
+      "import": "./src/session-bonsai/*.ts"
+    },
     "./session/*": {
       "types": "./src/session/*.ts",
       "import": "./src/session/*.ts"
@@ -548,6 +644,30 @@
     "./task/*": {
       "types": "./src/task/*.ts",
       "import": "./src/task/*.ts"
+    },
+    "./todo-meteors": {
+      "types": "./src/todo-meteors/index.ts",
+      "import": "./src/todo-meteors/index.ts"
+    },
+    "./todo-meteors/*": {
+      "types": "./src/todo-meteors/*.ts",
+      "import": "./src/todo-meteors/*.ts"
+    },
+    "./token-tide": {
+      "types": "./src/token-tide/index.ts",
+      "import": "./src/token-tide/index.ts"
+    },
+    "./token-tide/*": {
+      "types": "./src/token-tide/*.ts",
+      "import": "./src/token-tide/*.ts"
+    },
+    "./tool-constellation": {
+      "types": "./src/tool-constellation/index.ts",
+      "import": "./src/tool-constellation/index.ts"
+    },
+    "./tool-constellation/*": {
+      "types": "./src/tool-constellation/*.ts",
+      "import": "./src/tool-constellation/*.ts"
     },
     "./tool-discovery/*": {
       "types": "./src/tool-discovery/*.ts",

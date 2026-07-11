@@ -83,3 +83,12 @@ packages/coding-agent/bench/boot-baseline.json
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+.todos/
+.sidecar/
+.sidecar-agent
+.sidecar-task
+.sidecar-pr
+.sidecar-start.sh
+.sidecar-base
+.td-root
