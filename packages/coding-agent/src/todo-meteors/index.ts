@@ -1,5 +1,5 @@
 import type { MotionSetting } from "@oh-my-pi/pi-animation";
-import { settings } from "../config/settings";
+import { isSettingsInitialized, settings } from "../config/settings";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
 import { type TodoMeteorsContext, TodoMeteorsController } from "./controller";
 
@@ -9,6 +9,7 @@ export * from "./state";
 export * from "./widget";
 
 function readMotionSetting(): MotionSetting {
+	if (!isSettingsInitialized()) return "full";
 	const value = settings.get("display.animations");
 	return value === "off" || value === "subtle" || value === "full" ? value : "full";
 }
