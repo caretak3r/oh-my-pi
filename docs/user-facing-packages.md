@@ -23,6 +23,16 @@ Sources: [`packages/swarm-extension/README.md`](../packages/swarm-extension/READ
 - Side effects/output: creates the workspace if needed and persists state/logs under `<workspace>/.swarm_<name>/`.
 - Limits/errors: validates the YAML definition, dependency graph, and cycles before execution; standalone runs have no built-in timeout.
 
+### `packages/context-weather` — context-pressure barometer
+
+Sources: [`packages/context-weather/README.md`](../packages/context-weather/README.md), [`packages/context-weather/package.json`](../packages/context-weather/package.json), [`packages/context-weather/src/extension.ts`](../packages/context-weather/src/extension.ts).
+
+- Package: `@oh-my-pi/context-weather`; no bin — extension-only.
+- Feature: ambient, animated terminal barometer for context-window pressure, riding the shared `@oh-my-pi/pi-animation` kit; augments (does not replace) the footer context indicator and warns before auto-compaction via the compactor's `tokensUntilCompaction` forecast.
+- TUI extension mode: add `packages/context-weather/src/extension.ts` to `extensions`, or `omp plugin install ./packages/context-weather`; the widget mounts on `session_start` and disposes on `session_shutdown`/`session_switch`.
+- Settings (manifest keys, each with an env var fallback): `animations` (`off`\|`subtle`\|`full`, default `off`), `contextWeatherStyle` (`tide`\|`bar`\|`barometer`, default `tide`), `contextWeatherPlacement` (`aboveEditor`\|`belowEditor`, default `aboveEditor`), `contextWeatherStormAtPercent` (`0..100`, default `85`), `contextWeatherNotifyOnImminent` (boolean, default `true`).
+- Side effects/limits: motion is opt-in and hard-gates to `off` on non-TTY/`CI`/`NO_COLOR`/`TERM=dumb` or renderer back-pressure; storm variant fires a one-shot notification, not while core auto-compaction is already running.
+
 ### `packages/terminal-bench` — Terminal-Bench 2 runner
 
 Sources: [`packages/terminal-bench/README.md`](../packages/terminal-bench/README.md), [`packages/terminal-bench/package.json`](../packages/terminal-bench/package.json), [`packages/terminal-bench/src/runner.ts`](../packages/terminal-bench/src/runner.ts), [`packages/terminal-bench/agent/omp_local.py`](../packages/terminal-bench/agent/omp_local.py).
