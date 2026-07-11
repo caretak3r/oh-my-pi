@@ -11,6 +11,10 @@
 - Added Retry Radar: a draining countdown ring shown during auto-retry backoff (attempt count + short reason, e.g. `retry 2/5 · 429 · 8s`), settling green on recovery and red on give-up. Built on the shared `@oh-my-pi/pi-animation` kit; gated by the new `animations` setting and forced to a single static status line outside a TTY (or under `NO_COLOR`/`CI`/dumb terminals).
 - Added an `animations` setting (`off` | `subtle` | `full`) controlling the motion tier for ambient animated widgets.
 
+### Added
+
+- Spinner Personality Packs: themed spinner frames with animated gradient colorizers for the working/loading indicator, selectable via the `display.spinnerPack` setting (`fire`, `ocean`, `matrix`, `synthwave`, `aurora`, `dots-classic`, `pulse`, `reactive`). Gradients sweep at 30fps while streaming, follow the `display.shimmer` animation toggle, degrade to the xterm-256 palette without true color, and stay plain text with no escapes on non-TTY / `NO_COLOR` / `CI`.
+
 ## [16.3.11] - 2026-07-06
 
 ### Changed

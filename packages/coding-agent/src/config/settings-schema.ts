@@ -885,20 +885,39 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	animations: {
+	"display.spinnerPack": {
 		type: "enum",
-		values: ["off", "subtle", "full"] as const,
-		default: "full",
+		values: [
+			"default",
+			"fire",
+			"ocean",
+			"matrix",
+			"synthwave",
+			"aurora",
+			"dots-classic",
+			"pulse",
+			"reactive",
+		] as const,
+		default: "default",
 		ui: {
 			tab: "appearance",
 			group: "Display",
-			label: "Ambient Animations",
-			description:
-				"Motion tier for ambient animated widgets (e.g. the auto-retry countdown ring). off: static text; subtle: reduced cadence; full: smooth. Always forced off outside a TTY or under NO_COLOR/CI/dumb terminals.",
+			label: "Spinner Pack",
+			description: "Themed spinner frames + animated gradient for the working/loading indicator",
 			options: [
-				{ value: "off", label: "Off", description: "No motion; render one static frame" },
-				{ value: "subtle", label: "Subtle", description: "Reduced cadence (~12fps)" },
-				{ value: "full", label: "Full", description: "Smooth cadence (~30fps)" },
+				{ value: "default", label: "Default", description: "Theme spinner with the standard shimmer" },
+				{ value: "fire", label: "Fire", description: "Flickering ember gradient, red through amber" },
+				{ value: "ocean", label: "Ocean", description: "Rolling deep-blue to cyan swell" },
+				{ value: "matrix", label: "Matrix", description: "Cascading terminal green rain" },
+				{ value: "synthwave", label: "Synthwave", description: "Neon magenta / violet / cyan sunset" },
+				{ value: "aurora", label: "Aurora", description: "Northern-lights green into violet" },
+				{
+					value: "dots-classic",
+					label: "Dots Classic",
+					description: "Familiar braille dots with a subtle shimmer",
+				},
+				{ value: "pulse", label: "Pulse", description: "Breathing single-hue heartbeat" },
+				{ value: "reactive", label: "Reactive", description: "VU-meter gradient that speeds up with throughput" },
 			],
 		},
 	},
@@ -922,7 +941,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "appearance",
 			group: "Display",
 			label: "Animations",
-			description: "Motion for ambient animated widgets (e.g. the compaction condense animation)",
+			description: "Motion for ambient animated widgets (e.g. the compaction condense animation, auto-retry countdown ring)",
 			options: [
 				{ value: "full", label: "Full", description: "Full-cadence motion (~30fps)" },
 				{ value: "subtle", label: "Subtle", description: "Reduced-cadence motion (~12fps)" },

@@ -8,7 +8,7 @@ export * from "./ring";
 export * from "./widget";
 
 function readMotionSetting(): MotionSetting {
-	const value = settings.get("animations");
+	const value = settings.get("display.animations");
 	return value === "off" || value === "subtle" || value === "full" ? value : "full";
 }
 

@@ -63,6 +63,12 @@ interface PluginSettingBase {
 	secret?: boolean;
 	/** Environment variable to use as fallback value */
 	env?: string;
+	/**
+	 * Core settings key this plugin setting mirrors. When set, the setting has no
+	 * private plugin-config store: reads and writes route through the core setting
+	 * so the plugin panel/CLI and the core setting share one source of truth.
+	 */
+	mapsTo?: string;
 }
 
 export interface StringSetting extends PluginSettingBase {
@@ -81,6 +87,10 @@ export interface NumberSetting extends PluginSettingBase {
 export interface BooleanSetting extends PluginSettingBase {
 	type: "boolean";
 	default?: boolean;
+	/** With `mapsTo`, the core value written for `true` (e.g. an enum gate's "on" state). Defaults to `true`. */
+	mapsToTrue?: unknown;
+	/** With `mapsTo`, the core value written for `false` and treated as "off" when reading back. Defaults to `false`. */
+	mapsToFalse?: unknown;
 }
 
 export interface EnumSetting extends PluginSettingBase {

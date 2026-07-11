@@ -171,6 +171,7 @@ import { runProviderSetupWizard } from "./setup-wizard/lazy";
 import { interruptHint } from "./shared";
 import { clearMermaidCache } from "./theme/mermaid-cache";
 import { type ShimmerPalette, shimmerEnabled, shimmerSegments, shimmerText } from "./theme/shimmer";
+import { detectSpinnerCapabilities, isSpinnerPackId, resolveSpinnerPack } from "./theme/spinner-packs";
 import type { Theme } from "./theme/theme";
 import {
 	getEditorTheme,
@@ -3635,15 +3636,34 @@ export class InteractiveMode implements InteractiveModeContext {
 			// message is static, so leave `animated` unset and let the loader use
 			// the spinner-only ~12.5fps cadence instead of repainting a frozen line.
 			if (shimmerEnabled()) messageColorFn.animated = true;
+			// Spinner Personality Packs: when a non-default pack is selected it
+			// overrides the frames + message colorizer. `shimmerEnabled()` doubles as
+			// the animations gate — with shimmer disabled the pack renders a static
+			// gradient (no `animated` flag), matching the default indicator's cadence.
+			let spinnerFrames = getSymbolTheme().spinnerFrames;
+			let messageColorizer: LoaderMessageColorFn = messageColorFn;
+			const spinnerPack = this.settings.get("display.spinnerPack");
+			if (spinnerPack !== "default" && isSpinnerPackId(spinnerPack)) {
+				const capabilities = detectSpinnerCapabilities({ trueColor: TERMINAL.trueColor });
+				const resolved = resolveSpinnerPack(spinnerPack, {
+					animations: shimmerEnabled(),
+					capabilities,
+					tokensPerSecond: () => this.statusLine.getTokensPerSecond(),
+				});
+				if (resolved) {
+					spinnerFrames = resolved.frames;
+					messageColorizer = resolved.colorize;
+				}
+			}
 			this.loadingAnimation = new Loader(
 				this.ui,
 				spinner => {
 					const accent = this.#getWorkingMessageAccent();
 					return accent ? `${accent.main}${spinner}\x1b[39m` : theme.fg("accent", spinner);
 				},
-				messageColorFn,
+				messageColorizer,
 				this.#defaultWorkingMessage,
-				getSymbolTheme().spinnerFrames,
+				spinnerFrames,
 			);
 			this.statusContainer.addChild(this.loadingAnimation);
 		} else if (!this.statusContainer.children.includes(this.loadingAnimation)) {
