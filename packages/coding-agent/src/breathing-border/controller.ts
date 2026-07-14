@@ -1,4 +1,4 @@
-import type { FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
+import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
 import { AnimationHost, backpressureFromTui, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
@@ -8,9 +8,6 @@ import { type BreathingBorderTheme, BreathingBorderWidget, renderBreathingBorder
 
 const WIDGET_KEY = "breathing-border";
 const WIDGET_OPTIONS: ExtensionWidgetOptions = { placement: "aboveEditor" };
-
-/** The widget-factory's `tui` param, widened to also expose the live render-backpressure signal. */
-type BreathingBorderTui = Pick<TUI, "requestComponentRender" | "renderUnderPressure">;
 
 /**
  * Per-event surface the controller needs. Adapted from the extension
@@ -31,6 +28,25 @@ export interface BreathingBorderContext {
 }
 
 type Mount = { mode: "off" } | { mode: "animated"; host: AnimationHost } | { mode: "settled" };
+
+/**
+ * The {@link AnimationHost} backpressure field must be wired at construction,
+ * before the widget factory supplies the real `tui` — this adapter lets the
+ * host read a live signal once {@link attach} runs from inside that factory.
+ */
+function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
+	let live: BackpressureSignal | undefined;
+	return {
+		signal: {
+			get underPressure() {
+				return live?.underPressure ?? false;
+			},
+		},
+		attach(tui) {
+			live = backpressureFromTui(tui);
+		},
+	};
+}
 
 /**
  * Drives the breathing border: `agent_start` (re)starts the continuous
@@ -103,22 +119,15 @@ export class BreathingBorderController {
 			return { mode: "off" };
 		}
 
-		const host = new AnimationHost({ policy, scheduler: this.#scheduler });
+		const backpressure = deferredBackpressure();
+		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
 		const state = this.#state;
 		const clock = this.#scheduler;
 		const onSettled = () => this.#teardownToStatic(ctx, host);
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui: BreathingBorderTui, theme) => {
-				// Wire live render-backpressure into the policy now that the real `tui`
-				// is available — `onFrame` re-resolves from it every tick, so sustained
-				// backpressure forces the tier to `off` and freezes instantly.
-				policy.setEnvironment({
-					hasUI: ctx.hasUI,
-					isTTY: ctx.isTTY,
-					env: ctx.env,
-					backpressure: backpressureFromTui(tui),
-				});
+			(tui, theme) => {
+				backpressure.attach(tui);
 				return new BreathingBorderWidget({ tui, host, policy, state, theme, clock, onSettled });
 			},
 			WIDGET_OPTIONS,

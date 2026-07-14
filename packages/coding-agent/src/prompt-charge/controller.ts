@@ -1,5 +1,6 @@
-import type { FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
+import { AnimationHost, backpressureFromTui, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { TUI } from "@oh-my-pi/pi-tui";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { InputEvent } from "../extensibility/extensions/types";
 import { chargeFraction } from "./charge";
@@ -30,6 +31,25 @@ export interface PromptChargeContext {
 }
 
 type Mount = { mode: "animated"; host: AnimationHost } | { mode: "off" };
+
+/**
+ * The {@link AnimationHost} backpressure field must be wired at construction,
+ * before the widget factory supplies the real `tui` — this adapter lets the
+ * host read a live signal once {@link attach} runs from inside that factory.
+ */
+function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
+	let live: BackpressureSignal | undefined;
+	return {
+		signal: {
+			get underPressure() {
+				return live?.underPressure ?? false;
+			},
+		},
+		attach(tui) {
+			live = backpressureFromTui(tui);
+		},
+	};
+}
 
 /**
  * Drives Prompt Charge: unlike every prior Wave 2 feature, there is no
@@ -101,13 +121,17 @@ export class PromptChargeController {
 			return { mode: "off" };
 		}
 
-		const host = new AnimationHost({ policy, scheduler: this.#scheduler });
+		const backpressure = deferredBackpressure();
+		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
 		const state = this.#state;
 		const clock = this.#scheduler;
 		const getEditorText = ctx.getEditorText;
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => new PromptChargeWidget({ tui, host, policy, state, theme, clock, getEditorText }),
+			(tui, theme) => {
+				backpressure.attach(tui);
+				return new PromptChargeWidget({ tui, host, policy, state, theme, clock, getEditorText });
+			},
 			WIDGET_OPTIONS,
 		);
 		return { mode: "animated", host };

@@ -1,5 +1,6 @@
-import type { FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
+import { AnimationHost, backpressureFromTui, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { TUI } from "@oh-my-pi/pi-tui";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { SessionBranchEvent, SessionTreeEvent } from "../extensibility/extensions/types";
 import { BonsaiState } from "./state";
@@ -41,6 +42,25 @@ export interface SessionBonsaiContext {
 }
 
 type Mount = { mode: "animated"; host: AnimationHost } | { mode: "static" };
+
+/**
+ * The {@link AnimationHost} backpressure field must be wired at construction,
+ * before the widget factory supplies the real `tui` — this adapter lets the
+ * host read a live signal once {@link attach} runs from inside that factory.
+ */
+function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
+	let live: BackpressureSignal | undefined;
+	return {
+		signal: {
+			get underPressure() {
+				return live?.underPressure ?? false;
+			},
+		},
+		attach(tui) {
+			live = backpressureFromTui(tui);
+		},
+	};
+}
 
 function toRawTree(nodes: readonly BonsaiTreeSourceNode[]): RawTreeNode[] {
 	return nodes.map(node => ({ id: node.entry.id, children: toRawTree(node.children) }));
@@ -114,12 +134,16 @@ export class SessionBonsaiController {
 			return { mode: "static" };
 		}
 
-		const host = new AnimationHost({ policy, scheduler: this.#scheduler });
+		const backpressure = deferredBackpressure();
+		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
 		const state = this.#state;
 		const clock = this.#scheduler;
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => new SessionBonsaiWidget({ tui, host, policy, state, theme, clock }),
+			(tui, theme) => {
+				backpressure.attach(tui);
+				return new SessionBonsaiWidget({ tui, host, policy, state, theme, clock });
+			},
 			WIDGET_OPTIONS,
 		);
 		return { mode: "animated", host };

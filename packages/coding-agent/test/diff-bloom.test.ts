@@ -324,14 +324,11 @@ describe("DiffBloomWidget", () => {
 		widget.dispose();
 	});
 
-	it("backpressure freezes the widget instantly: the tier flips off and the host unsubscribes on the next frame", () => {
+	it("backpressure freezes the widget instantly: no frame is emitted while under pressure, the widget stays subscribed, and it resumes once pressure clears", () => {
 		const scheduler = manualScheduler();
 		const tui = new ToggleTui();
-		const policy = new MotionPolicy(
-			{ hasUI: true, isTTY: true, env: {}, backpressure: backpressureFromTui(tui) },
-			"full",
-		);
-		const host = new AnimationHost({ policy, scheduler });
+		const policy = new MotionPolicy(fullEnv, "full");
+		const host = new AnimationHost({ policy, backpressure: backpressureFromTui(tui), scheduler });
 		const state = new DiffBloomState();
 		state.applyBloom("a.ts", 10, 2, 0);
 		const widget = new DiffBloomWidget({
@@ -346,11 +343,53 @@ describe("DiffBloomWidget", () => {
 		widget.render(20);
 		expect(widget.animating).toBe(true);
 
+		scheduler.advance(1000 / 30);
+		const elapsedBeforePressure = widget.elapsedMs;
+		expect(elapsedBeforePressure).toBeGreaterThan(0);
+
 		tui.renderUnderPressure = true;
 		scheduler.advance(1000 / 30);
-		expect(policy.tier).toBe("off");
+		scheduler.advance(1000 / 30);
+		// Host-level backpressure skips frame emission entirely (not a tier
+		// flip): the widget stays subscribed and its phase freezes at the last
+		// emitted frame instead of collapsing to the static `off` frame.
+		expect(policy.tier).toBe("full");
+		expect(widget.animating).toBe(true);
+		expect(host.subscriberCount).toBe(1);
+		expect(widget.elapsedMs).toBe(elapsedBeforePressure);
+
+		tui.renderUnderPressure = false;
+		scheduler.advance(1000 / 30);
+		expect(widget.elapsedMs).toBeGreaterThan(elapsedBeforePressure);
+		widget.dispose();
+	});
+
+	it("still responds to a live tier change via the policy subscription independently of host-level backpressure", () => {
+		const scheduler = manualScheduler();
+		const tui = new ToggleTui();
+		const policy = new MotionPolicy(fullEnv, "full");
+		const host = new AnimationHost({ policy, backpressure: backpressureFromTui(tui), scheduler });
+		const state = new DiffBloomState();
+		state.applyBloom("a.ts", 10, 2, 0);
+		const widget = new DiffBloomWidget({
+			tui,
+			host,
+			policy,
+			state,
+			theme: idTheme,
+			clock: scheduler,
+			onSettled: () => {},
+		});
+		widget.render(20);
+		expect(widget.animating).toBe(true);
+
+		policy.setSetting("off");
 		expect(widget.animating).toBe(false);
 		expect(host.subscriberCount).toBe(0);
+
+		policy.setSetting("full");
+		expect(widget.animating).toBe(true);
+		expect(host.subscriberCount).toBe(1);
 		widget.dispose();
 	});
 

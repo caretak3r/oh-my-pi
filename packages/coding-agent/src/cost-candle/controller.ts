@@ -1,5 +1,6 @@
-import type { FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
+import { AnimationHost, backpressureFromTui, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { TUI } from "@oh-my-pi/pi-tui";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { MessageEndEvent } from "../extensibility/extensions/types";
 import { CostCandleState } from "./state";
@@ -39,6 +40,25 @@ export interface CostCandleContext {
 }
 
 type Mount = { mode: "animated"; host: AnimationHost } | { mode: "static" };
+
+/**
+ * The {@link AnimationHost} backpressure field must be wired at construction,
+ * before the widget factory supplies the real `tui` — this adapter lets the
+ * host read a live signal once {@link attach} runs from inside that factory.
+ */
+function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
+	let live: BackpressureSignal | undefined;
+	return {
+		signal: {
+			get underPressure() {
+				return live?.underPressure ?? false;
+			},
+		},
+		attach(tui) {
+			live = backpressureFromTui(tui);
+		},
+	};
+}
 
 /**
  * Drives Cost Candle: reads `usage.cost.total` — already a settled USD
@@ -97,12 +117,16 @@ export class CostCandleController {
 			return { mode: "static" };
 		}
 
-		const host = new AnimationHost({ policy, scheduler: this.#scheduler });
+		const backpressure = deferredBackpressure();
+		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
 		const state = this.#state;
 		const clock = this.#scheduler;
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => new CostCandleWidget({ tui, host, policy, state, theme, clock }),
+			(tui, theme) => {
+				backpressure.attach(tui);
+				return new CostCandleWidget({ tui, host, policy, state, theme, clock });
+			},
 			WIDGET_OPTIONS,
 		);
 		return { mode: "animated", host };

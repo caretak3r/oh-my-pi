@@ -109,12 +109,13 @@ export interface ReflectionRippleWidgetOptions extends AnimatedWidgetOptions {
 }
 
 /**
- * Ambient widget for the reflection ripple. Each frame it first re-resolves
- * the {@link MotionPolicy} from the live backpressure signal ({@link
- * onFrame}) — under render pressure this flips the tier to `off`, which the
- * {@link AnimatedWidget} base turns into an immediate unsubscribe-and-freeze
- * — then checks whether the ripple just finished settling. Reads {@link
- * ReflectionRippleClock} rather than `this.elapsedMs` for the same
+ * Ambient widget for the reflection ripple. Render-backpressure is wired
+ * into the {@link AnimationHost} directly (constructed by the controller),
+ * which time-skips frame emission while under pressure — this widget's
+ * `onFrame` simply never fires during a skipped frame, so the ripple freezes
+ * in place and resumes from the correct wall-clock phase once pressure
+ * clears. Each frame it checks whether the ripple just finished settling.
+ * Reads {@link ReflectionRippleClock} rather than `this.elapsedMs` for the same
  * dual-clock-seam reason as every other Wave 2 widget: the host's relative
  * elapsed-ms is anchored to whenever the host's first subscriber attached,
  * not to the triggering event, so ripple-phase math needs its own shared
@@ -137,7 +138,6 @@ export class ReflectionRippleWidget extends AnimatedWidget {
 	}
 
 	onFrame(_elapsedMs: number): void {
-		this.#policy.refresh();
 		if (this.#state.settleIfDone(this.#clock.now())) {
 			this.#onSettled();
 		}

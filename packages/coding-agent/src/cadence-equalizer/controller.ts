@@ -1,5 +1,6 @@
-import type { FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
+import { AnimationHost, backpressureFromTui, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { TUI } from "@oh-my-pi/pi-tui";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { MessageEndEvent, MessageStartEvent, MessageUpdateEvent } from "../extensibility/extensions/types";
 import { calculateTokensPerSecond } from "../modes/components/status-line/token-rate";
@@ -35,6 +36,25 @@ export interface CadenceEqualizerContext {
 }
 
 type Mount = { mode: "animated"; host: AnimationHost } | { mode: "static" };
+
+/**
+ * The {@link AnimationHost} backpressure field must be wired at construction,
+ * before the widget factory supplies the real `tui` — this adapter lets the
+ * host read a live signal once {@link attach} runs from inside that factory.
+ */
+function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
+	let live: BackpressureSignal | undefined;
+	return {
+		signal: {
+			get underPressure() {
+				return live?.underPressure ?? false;
+			},
+		},
+		attach(tui) {
+			live = backpressureFromTui(tui);
+		},
+	};
+}
 
 /** The minimal shape `calculateTokensPerSecond` needs from an assistant `AgentMessage`. */
 interface AssistantSample {
@@ -144,13 +164,17 @@ export class CadenceEqualizerController {
 			return { mode: "static" };
 		}
 
-		const host = new AnimationHost({ policy, scheduler: this.#scheduler });
+		const backpressure = deferredBackpressure();
+		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
 		const state = this.#state;
 		const wallClock = this.#wallClock;
 		const sampleRate = (wallNowMs: number): number | null => this.sampleRate(wallNowMs);
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => new CadenceEqualizerWidget({ tui, host, policy, state, theme, wallClock, sampleRate }),
+			(tui, theme) => {
+				backpressure.attach(tui);
+				return new CadenceEqualizerWidget({ tui, host, policy, state, theme, wallClock, sampleRate });
+			},
 			WIDGET_OPTIONS,
 		);
 		return { mode: "animated", host };

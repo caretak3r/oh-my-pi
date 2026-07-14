@@ -1,5 +1,6 @@
-import type { FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
+import { AnimationHost, backpressureFromTui, MotionPolicy } from "@oh-my-pi/pi-animation";
+import type { TUI } from "@oh-my-pi/pi-tui";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { AutoRetryEndEvent, AutoRetryStartEvent } from "../extensibility/shared-events";
 import { shortReason } from "./ring";
@@ -58,6 +59,25 @@ interface StaticActive {
 type ActiveEpisode = AnimatedActive | StaticActive;
 
 /**
+ * The {@link AnimationHost} backpressure field must be wired at construction,
+ * before the widget factory supplies the real `tui` — this adapter lets the
+ * host read a live signal once {@link attach} runs from inside that factory.
+ */
+function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
+	let live: BackpressureSignal | undefined;
+	return {
+		signal: {
+			get underPressure() {
+				return live?.underPressure ?? false;
+			},
+		},
+		attach(tui) {
+			live = backpressureFromTui(tui);
+		},
+	};
+}
+
+/**
  * Drives the auto-retry countdown ring: mounts an animated ring on
  * `auto_retry_start`, settles it green/red on `auto_retry_end`, then clears it —
  * disposing the shared {@link AnimationHost} so no frame-clock subscription
@@ -98,11 +118,15 @@ export class RetryRadarController {
 			return;
 		}
 
-		const host = new AnimationHost({ policy, scheduler: this.#scheduler });
+		const backpressure = deferredBackpressure();
+		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
 		this.#active = { mode: "animated", state, host };
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => new RetryRadarWidget({ tui, host, policy, state, theme }),
+			(tui, theme) => {
+				backpressure.attach(tui);
+				return new RetryRadarWidget({ tui, host, policy, state, theme });
+			},
 			WIDGET_OPTIONS,
 		);
 	}
