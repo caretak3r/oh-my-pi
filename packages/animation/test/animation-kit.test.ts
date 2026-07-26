@@ -405,3 +405,64 @@ describe("AnimatedWidget live tier changes", () => {
 		expect(policy.listenerCount).toBe(1);
 	});
 });
+
+describe("fail-open error boundary", () => {
+	it("quarantines a throwing listener without stopping sibling frames", () => {
+		const scheduler = new FakeScheduler();
+		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		let throwerCalls = 0;
+		let siblingFrames = 0;
+		host.subscribe(() => {
+			throwerCalls++;
+			throw new Error("broken animation");
+		});
+		host.subscribe(() => {
+			siblingFrames++;
+		});
+
+		expect(() => scheduler.advance(TIER_CADENCE_MS.full * 2 + 1)).not.toThrow();
+		expect(siblingFrames).toBe(2);
+		expect(throwerCalls).toBe(1);
+		expect(host.subscriberCount).toBe(1);
+	});
+
+	it("stops the shared timer when the last listener is quarantined", () => {
+		const scheduler = new FakeScheduler();
+		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		host.subscribe(() => {
+			throw new Error("broken animation");
+		});
+
+		expect(() => scheduler.advance(TIER_CADENCE_MS.full + 1)).not.toThrow();
+		expect(host.subscriberCount).toBe(0);
+		expect(scheduler.activeTimers).toBe(0);
+		expect(host.running).toBe(false);
+	});
+
+	it("disposes a widget whose frame hook throws", () => {
+		class ThrowingWidget extends AnimatedWidget {
+			override onFrame(): void {
+				throw new Error("broken widget");
+			}
+
+			renderFrame(): readonly string[] {
+				return ["static"];
+			}
+		}
+
+		const scheduler = new FakeScheduler();
+		const policy = fullPolicy();
+		const host = new AnimationHost({ policy, scheduler });
+		const tui = new CountingHost();
+		const widget = new ThrowingWidget({ tui, host, policy });
+
+		expect(() => scheduler.advance(TIER_CADENCE_MS.full + 1)).not.toThrow();
+		expect(widget.animating).toBe(false);
+		expect(host.subscriberCount).toBe(0);
+		expect(policy.listenerCount).toBe(1);
+
+		const rendersAfterFailure = tui.renders;
+		scheduler.advance(TIER_CADENCE_MS.full * 2 + 1);
+		expect(tui.renders).toBe(rendersAfterFailure);
+	});
+});

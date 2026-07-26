@@ -1,3 +1,4 @@
+import { logger } from "@oh-my-pi/pi-utils";
 import { type BackpressureSignal, NO_BACKPRESSURE } from "./backpressure";
 import type { MotionPolicy } from "./motion-policy";
 
@@ -132,8 +133,21 @@ export class AnimationHost {
 		this.#frame++;
 		const elapsedMs = this.#scheduler.now() - (this.#startedAt ?? this.#scheduler.now());
 		// Snapshot so a listener unsubscribing mid-emit cannot skip a sibling.
+		let quarantined = false;
 		for (const listener of [...this.#listeners]) {
-			listener(this.#frame, elapsedMs);
+			try {
+				listener(this.#frame, elapsedMs);
+			} catch (err) {
+				// Fail-open: one bad renderer must neither stop siblings nor escape
+				// the scheduler interval as a process-level uncaught exception.
+				this.#listeners.delete(listener);
+				quarantined = true;
+				logger.error("AnimationHost listener threw; quarantined", {
+					frame: this.#frame,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
 		}
+		if (quarantined) this.#sync();
 	}
 }
