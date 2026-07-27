@@ -11,7 +11,15 @@ import {
 	isEnoent,
 	logger,
 } from "@oh-my-pi/pi-utils";
-import { isSettingsInitialized, type SettingPath, settings } from "../../config/settings";
+import {
+	getEnumValues,
+	getType,
+	isSettingsInitialized,
+	SETTINGS_SCHEMA,
+	type SettingPath,
+	type SettingValue,
+	settings,
+} from "../../config/settings";
 import { withExitGuard } from "../utils";
 import { type GitSource, parseGitUrl } from "./git-url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
@@ -114,14 +122,39 @@ interface RuntimePackageJson {
 	name?: unknown;
 }
 
+/** Whether a manifest-supplied `mapsTo` names a real core setting. */
+function isKnownSettingPath(path: string): path is SettingPath {
+	return path in SETTINGS_SCHEMA;
+}
+
+/**
+ * Whether `value` is in-schema for the core setting at `key`. Array/record
+ * settings are never valid write-through targets — there is no sane mapping
+ * from a scalar plugin setting.
+ */
+function isValidCoreValue(key: SettingPath, value: unknown): boolean {
+	switch (getType(key)) {
+		case "boolean":
+			return typeof value === "boolean";
+		case "string":
+			return typeof value === "string";
+		case "number":
+			return typeof value === "number" && Number.isFinite(value);
+		case "enum":
+			return typeof value === "string" && (getEnumValues(key)?.includes(value) ?? false);
+		default:
+			return false;
+	}
+}
+
 /**
  * Read the core setting a mapped plugin setting mirrors, coerced back to the
  * plugin setting's own type. Returns `undefined` when the schema is unmapped or
  * the core settings singleton is not initialized (e.g. some CLI contexts).
  */
 function readMappedCoreValue(schema: PluginSettingSchema): unknown {
-	if (!schema.mapsTo || !isSettingsInitialized()) return undefined;
-	const core = settings.get(schema.mapsTo as SettingPath) as unknown;
+	if (!schema.mapsTo || !isSettingsInitialized() || !isKnownSettingPath(schema.mapsTo)) return undefined;
+	const core = settings.get(schema.mapsTo) as unknown;
 	if (schema.type === "boolean") {
 		const off = schema.mapsToFalse ?? false;
 		return core !== off;
@@ -137,19 +170,34 @@ function readMappedCoreValue(schema: PluginSettingSchema): unknown {
  */
 function writeMappedCoreValue(schema: PluginSettingSchema, value: unknown): boolean {
 	if (!schema.mapsTo || !isSettingsInitialized()) return false;
-	const key = schema.mapsTo as SettingPath;
-	const set = settings.set as unknown as (path: SettingPath, value: unknown) => void;
-	if (schema.type === "boolean") {
-		const on = value === true || value === "true";
-		if (on) {
-			const off = schema.mapsToFalse ?? false;
-			if (settings.get(key) === off) set(key, schema.mapsToTrue ?? true);
-		} else {
-			set(key, schema.mapsToFalse ?? false);
-		}
-	} else {
-		set(key, value);
+	if (!isKnownSettingPath(schema.mapsTo)) {
+		logger.warn("Plugin setting maps to unknown core setting; storing in plugin config instead", {
+			mapsTo: schema.mapsTo,
+		});
+		return false;
 	}
+	const key = schema.mapsTo;
+	const resolved =
+		schema.type === "boolean"
+			? value === true || value === "true"
+				? (schema.mapsToTrue ?? true)
+				: (schema.mapsToFalse ?? false)
+			: value;
+	if (schema.type === "boolean" && (value === true || value === "true")) {
+		// Only flip on from the off state so a richer already-on core value survives.
+		if (settings.get(key) !== (schema.mapsToFalse ?? false)) return true;
+	}
+	if (!isValidCoreValue(key, resolved)) {
+		logger.warn(
+			"Plugin setting value is out of schema for its mapped core setting; storing in plugin config instead",
+			{
+				mapsTo: key,
+				value: resolved,
+			},
+		);
+		return false;
+	}
+	settings.set(key, resolved as SettingValue<SettingPath>);
 	return true;
 }
 
