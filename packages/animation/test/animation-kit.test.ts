@@ -228,6 +228,31 @@ describe("MotionPolicy gating", () => {
 		expect(seen).toEqual(["subtle", "off"]);
 	});
 
+	it("re-resolves live backpressure when the setting value is unchanged", () => {
+		const backpressure = new ToggleBackpressure();
+		backpressure.underPressure = true;
+		const policy = new MotionPolicy(interactiveEnv({ backpressure }), "full");
+		const seen: string[] = [];
+		policy.subscribe(tier => seen.push(tier));
+		expect(policy.tier).toBe("off");
+
+		backpressure.underPressure = false;
+		policy.setSetting("full");
+
+		expect(policy.tier).toBe("full");
+		expect(seen).toEqual(["full"]);
+	});
+
+	it("does not notify when the setting and environment resolve to the same tier", () => {
+		const policy = new MotionPolicy(interactiveEnv(), "full");
+		const seen: string[] = [];
+		policy.subscribe(tier => seen.push(tier));
+
+		policy.setSetting("full");
+
+		expect(seen).toEqual([]);
+	});
+
 	it("maps each tier to its cadence; off never starts a host timer", () => {
 		expect(TIER_CADENCE_MS.off).toBe(0);
 		expect(TIER_CADENCE_MS.subtle).toBeGreaterThan(TIER_CADENCE_MS.full);

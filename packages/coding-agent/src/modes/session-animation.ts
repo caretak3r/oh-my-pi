@@ -1,12 +1,7 @@
-import {
-	AnimationHost,
-	backpressureFromTui,
-	type FrameScheduler,
-	MotionPolicy,
-	type MotionSetting,
-} from "@oh-my-pi/pi-animation";
+import { AnimationHost, backpressureFromTui, type FrameScheduler, MotionPolicy } from "@oh-my-pi/pi-animation";
 import type { TUI } from "@oh-my-pi/pi-tui";
-import { isSettingsInitialized, settings } from "../config/settings";
+import { readMotionSetting } from "../config/motion";
+import { onDisplayAnimationsChanged } from "../config/settings";
 
 /** The one host/policy pair every animated widget in a session shares. */
 export interface SessionAnimationHandle {
@@ -20,12 +15,6 @@ interface SessionAnimation extends SessionAnimationHandle {
 
 const sessions = new WeakMap<TUI, SessionAnimation>();
 
-function readDisplayAnimations(): MotionSetting {
-	if (!isSettingsInitialized()) return "full";
-	const value = settings.get("display.animations");
-	return value === "off" || value === "subtle" || value === "full" ? value : "full";
-}
-
 export function sessionAnimation(
 	tui: TUI,
 	scheduler?: FrameScheduler,
@@ -33,8 +22,7 @@ export function sessionAnimation(
 ): SessionAnimationHandle {
 	const existing = sessions.get(tui);
 	if (existing) {
-		existing.policy.setSetting(readDisplayAnimations());
-		existing.policy.refresh();
+		existing.policy.setSetting(readMotionSetting());
 		return existing;
 	}
 
@@ -46,13 +34,19 @@ export function sessionAnimation(
 			env: environment?.env,
 			backpressure,
 		},
-		readDisplayAnimations(),
+		readMotionSetting(),
 	);
 	const host = new AnimationHost({ policy, backpressure, scheduler });
+	const unsubscribe = onDisplayAnimationsChanged(() => {
+		policy.setSetting(readMotionSetting());
+	});
 	const animation: SessionAnimation = {
 		host,
 		policy,
-		dispose: () => host.dispose(),
+		dispose: () => {
+			unsubscribe();
+			host.dispose();
+		},
 	};
 	sessions.set(tui, animation);
 	return animation;

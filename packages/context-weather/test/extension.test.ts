@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { MotionEnvironment } from "@oh-my-pi/pi-animation";
 import type { ContextUsage, ExtensionAPI, ExtensionContext, Theme } from "@oh-my-pi/pi-coding-agent";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { type ContextWeatherExtensionOptions, createContextWeatherExtension } from "../src/extension";
@@ -24,6 +25,7 @@ class ExtensionHarness {
 		stored: Record<string, unknown> = {},
 		env: Record<string, string | undefined> = {},
 		readPluginSettings?: (cwd: string) => Promise<Record<string, unknown>>,
+		motionEnvironment?: (tui: TUI) => MotionEnvironment,
 	) {
 		this.stored = stored;
 
@@ -58,7 +60,7 @@ class ExtensionHarness {
 		const options: ContextWeatherExtensionOptions = {
 			readPluginSettings: readPluginSettings ?? (async () => this.stored),
 			env,
-			motionEnvironment: () => ({ hasUI: true, isTTY: true, env: {} }),
+			motionEnvironment: motionEnvironment ?? (() => ({ hasUI: true, isTTY: true, env: {} })),
 			scheduler: this.#scheduler,
 		};
 		const extension = createContextWeatherExtension(options);
@@ -126,6 +128,33 @@ describe("context weather extension settings wiring", () => {
 			await harness.emit("context");
 			expect(harness.widget).toBe(widget);
 			expect(harness.widget?.animating).toBe(false);
+		} finally {
+			await harness.shutdown();
+		}
+	});
+
+	it("recovers from cleared render pressure when a context refresh keeps the same setting", async () => {
+		let underPressure = true;
+		const harness = new ExtensionHarness({ animations: "full" }, {}, undefined, () => ({
+			hasUI: true,
+			isTTY: true,
+			env: {},
+			backpressure: {
+				get underPressure() {
+					return underPressure;
+				},
+			},
+		}));
+		try {
+			await harness.emit("session_start");
+			const widget = harness.widget;
+			expect(widget?.animating).toBe(false);
+
+			underPressure = false;
+			await harness.emit("context");
+
+			expect(harness.widget).toBe(widget);
+			expect(harness.widget?.animating).toBe(true);
 		} finally {
 			await harness.shutdown();
 		}

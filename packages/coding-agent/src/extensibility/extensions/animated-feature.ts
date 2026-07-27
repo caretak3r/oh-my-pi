@@ -1,10 +1,15 @@
-import type { SessionShutdownEvent, SessionSwitchEvent } from "../shared-events";
+import { onDisplayAnimationsChanged } from "../../config/settings";
+import type { SessionShutdownEvent, SessionStartEvent, SessionSwitchEvent } from "../shared-events";
 import type { ExtensionContext, ExtensionHandler } from "./index";
 
 /** The extension API surface used to register animated-feature teardown. */
 export interface AnimatedFeatureLifecycleAPI {
 	on(event: "session_switch", handler: ExtensionHandler<SessionSwitchEvent>): void;
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
+}
+
+interface AnimatedFeatureSessionStartAPI {
+	on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;
 }
 
 /** The controller surface the lifecycle helper drives. */
@@ -26,12 +31,27 @@ export function registerAnimatedFeatureLifecycle<C>(
 	api: AnimatedFeatureLifecycleAPI,
 	lifecycle: AnimatedFeatureLifecycle<C>,
 ): void {
-	api.on("session_switch", (_event, ctx) => {
+	let latestCtx: ExtensionContext | undefined;
+	const disposeAndRemount = (ctx: ExtensionContext): void => {
 		const featureCtx = lifecycle.toContext(ctx);
 		lifecycle.dispose(featureCtx);
 		lifecycle.remountOnSwitch?.(featureCtx);
+	};
+	const unsubscribe = onDisplayAnimationsChanged(() => {
+		if (!latestCtx) return;
+		disposeAndRemount(latestCtx);
+	});
+
+	(api as AnimatedFeatureLifecycleAPI & AnimatedFeatureSessionStartAPI).on("session_start", (_event, ctx) => {
+		latestCtx = ctx;
+	});
+	api.on("session_switch", (_event, ctx) => {
+		latestCtx = ctx;
+		disposeAndRemount(ctx);
 	});
 	api.on("session_shutdown", (_event, ctx) => {
 		lifecycle.dispose(lifecycle.toContext(ctx));
+		latestCtx = undefined;
+		unsubscribe();
 	});
 }

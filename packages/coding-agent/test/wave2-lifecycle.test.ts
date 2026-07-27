@@ -4,6 +4,7 @@ import { createAgentFleetExtension } from "@oh-my-pi/pi-coding-agent/agent-fleet
 import { createBreathingBorderExtension } from "@oh-my-pi/pi-coding-agent/breathing-border";
 import { createCadenceEqualizerExtension } from "@oh-my-pi/pi-coding-agent/cadence-equalizer";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createContextConstellationExtension } from "@oh-my-pi/pi-coding-agent/context-constellation";
 import { createCostCandleExtension } from "@oh-my-pi/pi-coding-agent/cost-candle";
 import { createDiffBloomExtension } from "@oh-my-pi/pi-coding-agent/diff-bloom";
@@ -37,6 +38,7 @@ import { createGoalHorizonExtension } from "@oh-my-pi/pi-coding-agent/goal-horiz
 import type { Goal } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { createMemoryCrystalsExtension } from "@oh-my-pi/pi-coding-agent/memory-crystals";
 import { createModelWeatherVaneExtension } from "@oh-my-pi/pi-coding-agent/model-weather-vane";
+import type { SessionAnimationHandle } from "@oh-my-pi/pi-coding-agent/modes/session-animation";
 import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { createPromptChargeExtension } from "@oh-my-pi/pi-coding-agent/prompt-charge";
 import { createReflectionRippleExtension } from "@oh-my-pi/pi-coding-agent/reflection-ripple";
@@ -88,7 +90,10 @@ interface FeatureHarness {
 
 const idTheme: Pick<Theme, "fg"> = { fg: (_color, text) => text };
 
-function createExtensionContext(calls: CapturedWidgetCall[]): ExtensionContext {
+function createExtensionContext(
+	calls: CapturedWidgetCall[],
+	animationProvider?: () => SessionAnimationHandle | undefined,
+): ExtensionContext {
 	const policy = new MotionPolicy({ hasUI: true, isTTY: true, env: {} }, "full");
 	const animation = { host: new AnimationHost({ policy }), policy };
 	const sessionManager = {
@@ -104,7 +109,7 @@ function createExtensionContext(calls: CapturedWidgetCall[]): ExtensionContext {
 		hasUI: true,
 		ui: {
 			theme: idTheme as Theme,
-			animation: () => animation,
+			animation: animationProvider ?? (() => animation),
 			getEditorText: () => "",
 			getEditorTextLength: () => 0,
 			setWidget: (key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions) =>
@@ -466,5 +471,47 @@ describe("Prompt Charge remounts immediately after session switch", () => {
 
 		expect(switchCalls[0]?.content).toBeUndefined();
 		expect(switchCalls.at(-1)?.content).toBeDefined();
+	});
+});
+
+describe("display.animations changes remount static animated features", () => {
+	test("Tool Constellation clears its static mount and remounts animated on the next event", async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
+		settings.set("display.animations", "off");
+
+		const feature = FEATURES.find(candidate => candidate.key === "tool-constellation");
+		expect(feature).toBeDefined();
+		if (!feature) {
+			resetSettingsForTest();
+			return;
+		}
+
+		const calls: CapturedWidgetCall[] = [];
+		const api = new FakeExtensionApi();
+		let animation: SessionAnimationHandle | undefined;
+		const ctx = createExtensionContext(calls, () => animation);
+		try {
+			await feature.factory(api as unknown as ExtensionAPI);
+			await api.emit("session_start", ctx);
+			await feature.activate(api, ctx, 1);
+			expect(Array.isArray(lastFeatureCall(calls, feature.key)?.content)).toBe(true);
+
+			const beforeToggle = calls.length;
+			settings.set("display.animations", "full");
+			const toggleCalls = calls.slice(beforeToggle).filter(call => call.key === feature.key);
+			expect(toggleCalls.some(call => call.content === undefined)).toBe(true);
+			expect(lastFeatureCall(calls, feature.key)?.content).toBeUndefined();
+
+			const policy = new MotionPolicy({ hasUI: true, isTTY: true, env: {} }, "full");
+			animation = { host: new AnimationHost({ policy }), policy };
+			await feature.activate(api, ctx, 2);
+
+			expect(typeof lastFeatureCall(calls, feature.key)?.content).toBe("function");
+		} finally {
+			await api.emit("session_shutdown", ctx, sessionShutdown);
+			animation?.host.dispose();
+			resetSettingsForTest();
+		}
 	});
 });

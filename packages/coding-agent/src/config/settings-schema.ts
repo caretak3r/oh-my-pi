@@ -876,7 +876,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "appearance",
 			group: "Display",
 			label: "Shimmer",
-			description: "Animation style for working/loading messages",
+			description:
+				"Animation style for working/loading messages. This is independent of display.animations; display.animations: off does not disable shimmer today.",
 			options: [
 				{ value: "classic", label: "Classic", description: "Soft cosine wave sweeping across the text" },
 				{ value: "kitt", label: "KITT Scanner", description: "Knight Rider 1982 red light bouncing left-right" },
@@ -942,7 +943,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Display",
 			label: "Animations",
 			description:
-				"Motion tier for ambient animated widgets (e.g. the compaction condense animation, auto-retry countdown ring, tool constellation star map). off: static text; subtle: reduced cadence (~12fps); full: smooth (~30fps). Always forced off outside a TTY or under NO_COLOR/CI/dumb terminals.",
+				"Motion tier for ambient animated widgets (e.g. the compaction condense animation, auto-retry countdown ring, tool constellation star map). off: static text; subtle: reduced cadence (~12fps); full: smooth (~30fps). Always forced off outside a TTY or under NO_COLOR/CI/dumb terminals. This is independent of display.shimmer and spinner-pack gradient sweeps; off does not still those effects today.",
 			options: [
 				{ value: "full", label: "Full", description: "Full-cadence motion (~30fps)" },
 				{ value: "subtle", label: "Subtle", description: "Reduced-cadence motion (~12fps)" },

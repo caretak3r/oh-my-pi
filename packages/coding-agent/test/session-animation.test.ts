@@ -86,16 +86,35 @@ describe("sessionAnimation", () => {
 		expect(scheduler.activeTimers).toBe(1);
 	});
 
-	it("re-syncs the cached policy from display.animations on repeated access", async () => {
+	it("re-syncs the cached policy from live backpressure on repeated access", async () => {
 		await Settings.init({ inMemory: true });
-		const tui = fakeTui();
+		const pressure = { underPressure: true };
+		const tui = {
+			get renderUnderPressure() {
+				return pressure.underPressure;
+			},
+		} as unknown as TUI;
+		createdTuis.push(tui);
 		const first = sessionAnimation(tui, undefined, { isTTY: true, env: {} });
-		expect(first.policy.tier).toBe("full");
+		expect(first.policy.tier).toBe("off");
 
-		settings.set("display.animations", "off");
+		pressure.underPressure = false;
 		const second = sessionAnimation(tui, undefined, { isTTY: true, env: {} });
 
 		expect(second).toBe(first);
-		expect(second.policy.tier).toBe("off");
+		expect(second.policy.tier).toBe("full");
+	});
+
+	it("follows display.animations changes live without remounting", async () => {
+		await Settings.init({ inMemory: true });
+		const tui = fakeTui();
+		const animation = sessionAnimation(tui, undefined, { isTTY: true, env: {} });
+		const host = animation.host;
+		expect(animation.policy.tier).toBe("full");
+
+		settings.set("display.animations", "off");
+
+		expect(animation.host).toBe(host);
+		expect(animation.policy.tier).toBe("off");
 	});
 });

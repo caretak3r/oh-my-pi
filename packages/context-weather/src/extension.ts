@@ -8,8 +8,9 @@
  *
  * Settings resolve from the plugin's manifest-declared settings via the runtime
  * plugin settings store (`getPluginSettings`), with env-var fallbacks:
- * stored setting > env var > default. Both mount and the live `context` refresh
- * re-read the store, so `omp plugin` settings changes apply without a restart.
+ * stored setting > env var > core `display.animations` tier. Both mount and the
+ * live `context` refresh re-read the sources, so `omp plugin` and core motion
+ * changes apply without a restart.
  *
  * See README.md for the dev-load recipe and the manual acceptance walkthrough.
  */
@@ -21,6 +22,7 @@ import {
 	MotionPolicy,
 } from "@oh-my-pi/pi-animation";
 import type { ContextUsage, ExtensionAPI, ExtensionContext, Theme } from "@oh-my-pi/pi-coding-agent";
+import { readMotionSetting } from "@oh-my-pi/pi-coding-agent/config/motion";
 import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
 import { sessionAnimation } from "@oh-my-pi/pi-coding-agent/modes/session-animation";
 import type { TUI } from "@oh-my-pi/pi-tui";
@@ -96,11 +98,11 @@ export function createContextWeatherExtension(
 			try {
 				stored = await readPluginSettings(ctx.cwd);
 			} catch (err) {
-				pi.logger.warn("Context weather: failed to read plugin settings, using env/defaults", {
+				pi.logger.warn("Context weather: failed to read plugin settings, using env/core defaults", {
 					error: String(err),
 				});
 			}
-			return resolveContextWeatherSettingsFromSources(stored, options.env);
+			return resolveContextWeatherSettingsFromSources(stored, options.env, readMotionSetting());
 		};
 
 		const mount = async (ctx: ExtensionContext, preloaded?: ContextWeatherSettings): Promise<void> => {
