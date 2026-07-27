@@ -235,6 +235,9 @@ export interface ExtensionUIContext {
 	/** Get the current text from the core input editor. */
 	getEditorText(): string;
 
+	/** Length of getEditorText() without building the string. Optional: fall back to getEditorText().length. */
+	getEditorTextLength?(): number;
+
 	/** Show a multi-line editor for text editing. */
 	editor(
 		title: string,

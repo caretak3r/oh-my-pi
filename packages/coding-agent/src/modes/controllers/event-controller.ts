@@ -57,6 +57,8 @@ const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 const MAX_LIVE_IRC_CARDS = 4;
 const IDLE_RECAP_MIN_SECONDS = 1;
 const IDLE_RECAP_MAX_SECONDS = 3600;
+/** Display cap for a one-line working status message, not a protocol limit. */
+const MAX_WORKING_MESSAGE_INTENT_LENGTH = 200;
 
 const RAW_PARTIAL_JSON_RENDERERS: Record<string, true> = { bash: true, edit: true, apply_patch: true };
 
@@ -300,9 +302,14 @@ export class EventController {
 		// schema validation; `?.` only guards null/undefined, so guard the type too.
 		if (typeof intent !== "string") return;
 		const trimmed = intent.trim();
-		if (!trimmed || trimmed === this.#lastIntent) return;
-		this.#lastIntent = trimmed;
-		this.ctx.setWorkingMessage(`${trimmed}${interruptHint()}`);
+		if (!trimmed) return;
+		const capped =
+			trimmed.length > MAX_WORKING_MESSAGE_INTENT_LENGTH
+				? `${trimmed.slice(0, MAX_WORKING_MESSAGE_INTENT_LENGTH - 1)}…`
+				: trimmed;
+		if (capped === this.#lastIntent) return;
+		this.#lastIntent = capped;
+		this.ctx.setWorkingMessage(`${capped}${interruptHint()}`);
 	}
 
 	subscribeToAgent(): void {

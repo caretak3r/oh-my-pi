@@ -52,6 +52,27 @@ describe("spinner pack registry", () => {
 });
 
 describe("colorizeAtPhase determinism and capability degradation", () => {
+	it("keeps under-cap true-color output byte-identical", () => {
+		expect(colorizeAtPhase(SPINNER_PACKS.fire, "AB", 0, TRUE_COLOR)).toBe(
+			"\x1b[38;2;180;20;0mA\x1b[38;2;255;150;20mB\x1b[39m",
+		);
+	});
+
+	it("resets after 256 code points and preserves a 44-code-point tail verbatim", () => {
+		const codePoints = Array.from("🧪".repeat(300));
+		const input = codePoints.join("");
+		const rendered = colorizeAtPhase(SPINNER_PACKS.ocean, input, 0.2, TRUE_COLOR);
+		const reset = "\x1b[39m";
+		const resetIndex = rendered.lastIndexOf(reset);
+		const coloredPrefix = rendered.slice(0, resetIndex);
+		const plainTail = rendered.slice(resetIndex + reset.length);
+
+		expect(Bun.stripANSI(coloredPrefix)).toBe(codePoints.slice(0, 256).join(""));
+		expect(plainTail).toBe(codePoints.slice(256).join(""));
+		expect(plainTail).not.toContain("\x1b[");
+		expect(Bun.stripANSI(rendered)).toBe(input);
+	});
+
 	it("is deterministic for a fixed (text, phase, capabilities)", () => {
 		for (const id of SPINNER_PACK_IDS) {
 			const pack = SPINNER_PACKS[id];

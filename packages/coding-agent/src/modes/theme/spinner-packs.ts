@@ -19,6 +19,8 @@
 import type { LoaderMessageColorFn } from "@oh-my-pi/pi-tui";
 
 const FG_RESET = "\x1b[39m";
+/** Gradient work is bounded by what a terminal row can show; beyond this the tail renders plain. */
+const MAX_COLORIZED_CODE_POINTS = 256;
 
 /** 0–255 RGB triple used for gradient stops. */
 export interface Rgb {
@@ -319,10 +321,11 @@ export function colorizeAtPhase(
 	const chars = codePoints(text);
 	const n = chars.length;
 	if (n === 0) return "";
-	const denom = n > 1 ? n - 1 : 1;
+	const colorizedCount = Math.min(n, MAX_COLORIZED_CODE_POINTS);
+	const denom = colorizedCount > 1 ? colorizedCount - 1 : 1;
 	let out = "";
 	let prevSeq = "";
-	for (let i = 0; i < n; i++) {
+	for (let i = 0; i < colorizedCount; i++) {
 		// Position along the gradient: spread the pack's `wraps` cycles across the
 		// message and slide the whole field by `phase` over time.
 		const t = frac((i / denom) * pack.wraps - phase);
@@ -334,7 +337,9 @@ export function colorizeAtPhase(
 		}
 		out += chars[i];
 	}
-	return out + FG_RESET;
+	out += FG_RESET;
+	if (colorizedCount < n) out += chars.slice(colorizedCount).join("");
+	return out;
 }
 
 // ─── Resolution ──────────────────────────────────────────────────────────────

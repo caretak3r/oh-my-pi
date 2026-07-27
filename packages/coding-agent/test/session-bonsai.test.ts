@@ -8,8 +8,8 @@ import {
 	SessionBonsaiController,
 } from "@oh-my-pi/pi-coding-agent/session-bonsai/controller";
 import { budGlyph, isShimmering, unfurlGrowth } from "@oh-my-pi/pi-coding-agent/session-bonsai/growth";
-import { BonsaiState } from "@oh-my-pi/pi-coding-agent/session-bonsai/state";
-import type { RawTreeNode } from "@oh-my-pi/pi-coding-agent/session-bonsai/tree";
+import { type BonsaiSnapshot, BonsaiState } from "@oh-my-pi/pi-coding-agent/session-bonsai/state";
+import type { BonsaiNode, RawTreeNode } from "@oh-my-pi/pi-coding-agent/session-bonsai/tree";
 import {
 	activeLeafRank,
 	buildBonsaiTree,
@@ -68,6 +68,24 @@ function branchingRawTree(): RawTreeNode[] {
 			],
 		},
 	];
+}
+
+function sevenLeafRawTree(): RawTreeNode[] {
+	return [
+		{
+			id: "root",
+			children: Array.from({ length: 7 }, (_, i) => ({ id: `L${i + 1}`, children: [] })),
+		},
+	];
+}
+
+function bonsaiSnapshot(
+	tree: readonly BonsaiNode[],
+	activeLeafId: string | null,
+	spawnAt: ReadonlyMap<string, number>,
+): BonsaiSnapshot {
+	const display = pruneForDisplay(tree, activeLeafId, spawnAt);
+	return { tree, displayTree: display.nodes, hiddenLeaves: display.hiddenLeaves, activeLeafId, spawnAt };
 }
 
 describe("session bonsai tree collapsing (pure)", () => {
@@ -140,18 +158,9 @@ describe("session bonsai tree collapsing (pure)", () => {
 });
 
 describe("session bonsai pruning (pure)", () => {
-	function sevenLeafTree(): RawTreeNode[] {
-		return [
-			{
-				id: "root",
-				children: Array.from({ length: 7 }, (_, i) => ({ id: `L${i + 1}`, children: [] })),
-			},
-		];
-	}
-
 	it("does not prune at or below the display cap", () => {
 		const tree = buildBonsaiTree(
-			sevenLeafTree().map(n => ({ ...n, children: n.children.slice(0, MAX_DISPLAYED_LEAVES) })),
+			sevenLeafRawTree().map(n => ({ ...n, children: n.children.slice(0, MAX_DISPLAYED_LEAVES) })),
 			null,
 		);
 		const { nodes, hiddenLeaves } = pruneForDisplay(tree, null, new Map());
@@ -160,7 +169,7 @@ describe("session bonsai pruning (pure)", () => {
 	});
 
 	it("past the cap, always keeps the active leaf and fills the rest by most-recent spawn, dropping the remainder", () => {
-		const tree = buildBonsaiTree(sevenLeafTree(), "L1");
+		const tree = buildBonsaiTree(sevenLeafRawTree(), "L1");
 		const spawnAt = new Map([
 			["L1", 100],
 			["L2", 200],
@@ -181,7 +190,7 @@ describe("session bonsai pruning (pure)", () => {
 	});
 
 	it("ties in spawnAt break deterministically by original left-to-right order", () => {
-		const tree = buildBonsaiTree(sevenLeafTree(), null);
+		const tree = buildBonsaiTree(sevenLeafRawTree(), null);
 		const { nodes: first } = pruneForDisplay(tree, null, new Map());
 		const { nodes: second } = pruneForDisplay(tree, null, new Map());
 		expect(collectLeafIds(first)).toEqual(collectLeafIds(second));
@@ -282,20 +291,44 @@ describe("session bonsai state", () => {
 		expect(state.snapshot().spawnAt.size).toBe(0);
 	});
 
-	it("re-observing after a leaf's raw node disappears keeps its stale spawn entry (no pruning of dead ids)", () => {
+	it("removes spawn timestamps for node ids that disappear from the raw tree", () => {
 		const state = new BonsaiState();
 		state.update(branchingRawTree(), "C", 0); // compact tree keeps B (branch) and C/E (leaves; D collapses into E)
 		expect(state.snapshot().spawnAt.has("E")).toBe(true);
 		state.update([{ id: "A", children: [{ id: "C", children: [] }] }], "C", 1000); // the D->E branch is pruned from the raw tree entirely
 		expect(state.snapshot().tree.map(n => n.id)).not.toContain("E");
-		expect(state.snapshot().spawnAt.has("E")).toBe(true); // spawnAt is append-only; documents unbounded growth as a known tradeoff
+		expect(state.snapshot().spawnAt.has("E")).toBe(false);
+	});
+
+	it("re-prunes the cached display tree when only the active leaf changes", () => {
+		const state = new BonsaiState();
+		state.update(sevenLeafRawTree(), "L1", 0);
+		expect(collectLeafIds(state.snapshot().displayTree)).toEqual(["L1", "L2", "L3", "L4", "L5"]);
+
+		state.update(sevenLeafRawTree(), "L7", 1000);
+		expect(collectLeafIds(state.snapshot().displayTree)).toEqual(["L1", "L2", "L3", "L4", "L7"]);
 	});
 });
 
 describe("session bonsai rendering (pure)", () => {
+	it("preserves the rendered rows for a cached tree above the five-leaf display cap", () => {
+		const state = new BonsaiState();
+		state.update(sevenLeafRawTree(), "L1", 0);
+
+		expect(renderBonsaiTree(state.snapshot(), 0, idTheme, "subtle")).toEqual([
+			"●",
+			"├─ ✦",
+			"├─ ○",
+			"├─ ○",
+			"├─ ○",
+			"└─ ○",
+			"⋯ +2 more",
+		]);
+	});
+
 	it("is byte-stable across repeated calls with the same snapshot and elapsed time", () => {
 		const tree = buildBonsaiTree(branchingRawTree(), "C");
-		const snapshot = { tree, activeLeafId: "C", spawnAt: new Map([["B", -1000]]) };
+		const snapshot = bonsaiSnapshot(tree, "C", new Map([["B", -1000]]));
 		const first = renderBonsaiTree(snapshot, 1000, idTheme, "full");
 		const second = renderBonsaiTree(snapshot, 1000, idTheme, "full");
 		expect(first).toEqual(second);
@@ -304,23 +337,23 @@ describe("session bonsai rendering (pure)", () => {
 	it("renders a bud glyph while a freshly-spawned branch unfurls, then the resting glyph once grown", () => {
 		const tree = buildBonsaiTree(branchingRawTree(), "C");
 		const spawnAt = new Map([["B", 1000]]);
-		const mid = renderBonsaiTree({ tree, activeLeafId: "C", spawnAt }, 1500, idTheme, "full"); // 50% grown
+		const mid = renderBonsaiTree(bonsaiSnapshot(tree, "C", spawnAt), 1500, idTheme, "full"); // 50% grown
 		expect(mid[0]).toMatch(/[.o0]$/);
-		const grown = renderBonsaiTree({ tree, activeLeafId: "C", spawnAt }, 5000, idTheme, "full"); // fully grown, well past any shimmer window issues
+		const grown = renderBonsaiTree(bonsaiSnapshot(tree, "C", spawnAt), 5000, idTheme, "full"); // fully grown, well past any shimmer window issues
 		expect(grown[0]).not.toMatch(/[.o0]$/);
 	});
 
 	it("subtle tier always renders fully grown, ignoring spawn time", () => {
 		const tree = buildBonsaiTree(branchingRawTree(), "C");
 		const spawnAt = new Map([["B", 1000]]);
-		const rows = renderBonsaiTree({ tree, activeLeafId: "C", spawnAt }, 1000, idTheme, "subtle"); // t=spawn, would be 0% grown in full tier
+		const rows = renderBonsaiTree(bonsaiSnapshot(tree, "C", spawnAt), 1000, idTheme, "subtle"); // t=spawn, would be 0% grown in full tier
 		expect(rows[0]).not.toMatch(/[.o0]$/);
 	});
 
 	it("shows a dormant twig glyph for a non-active leaf and an active glyph for the active one", () => {
 		const tree = buildBonsaiTree(branchingRawTree(), "C");
 		const spawnAt = new Map([["B", -1000]]);
-		const rows = renderBonsaiTree({ tree, activeLeafId: "C", spawnAt }, 0, idTheme, "subtle");
+		const rows = renderBonsaiTree(bonsaiSnapshot(tree, "C", spawnAt), 0, idTheme, "subtle");
 		expect(rows.some(r => r.trimEnd().endsWith("✦"))).toBe(true); // C is active
 		expect(rows.some(r => r.trimEnd().endsWith("○"))).toBe(true); // E is dormant
 	});
@@ -330,18 +363,18 @@ describe("session bonsai rendering (pure)", () => {
 			{ id: "root", children: Array.from({ length: 7 }, (_, i) => ({ id: `L${i + 1}`, children: [] })) },
 		];
 		const tree = buildBonsaiTree(raw, "L1");
-		const rows = renderBonsaiTree({ tree, activeLeafId: "L1", spawnAt: new Map() }, 0, idTheme, "subtle");
+		const rows = renderBonsaiTree(bonsaiSnapshot(tree, "L1", new Map()), 0, idTheme, "subtle");
 		expect(rows[rows.length - 1]).toContain("+2 more");
 	});
 
 	it("falls back to a placeholder when there are no branches yet", () => {
-		const rows = renderBonsaiTree({ tree: [], activeLeafId: null, spawnAt: new Map() }, 0, idTheme, "full");
+		const rows = renderBonsaiTree(bonsaiSnapshot([], null, new Map()), 0, idTheme, "full");
 		expect(rows[0]).toContain("no branches yet");
 	});
 
 	it("never renders the literal string 'undefined' even with a NaN elapsed clock reading", () => {
 		const tree = buildBonsaiTree(branchingRawTree(), "C");
-		const rows = renderBonsaiTree({ tree, activeLeafId: "C", spawnAt: new Map() }, Number.NaN, idTheme, "full");
+		const rows = renderBonsaiTree(bonsaiSnapshot(tree, "C", new Map()), Number.NaN, idTheme, "full");
 		expect(rows.every(r => !r.includes("undefined"))).toBe(true);
 	});
 });
@@ -349,19 +382,19 @@ describe("session bonsai rendering (pure)", () => {
 describe("session bonsai static off-tier text", () => {
 	it("formats 'branch X of Y' when an active leaf is known", () => {
 		const tree = buildBonsaiTree(branchingRawTree(), "C");
-		expect(renderBonsaiOffText({ tree, activeLeafId: "C", spawnAt: new Map() })).toBe("branch 1 of 2");
-		expect(renderBonsaiOffText({ tree, activeLeafId: "E", spawnAt: new Map() })).toBe("branch 2 of 2");
+		expect(renderBonsaiOffText(bonsaiSnapshot(tree, "C", new Map()))).toBe("branch 1 of 2");
+		expect(renderBonsaiOffText(bonsaiSnapshot(tree, "E", new Map()))).toBe("branch 2 of 2");
 	});
 
 	it("falls back to a bare pluralized count when there is no active leaf yet", () => {
 		const tree = buildBonsaiTree(branchingRawTree(), null);
-		expect(renderBonsaiOffText({ tree, activeLeafId: null, spawnAt: new Map() })).toBe("2 branches");
+		expect(renderBonsaiOffText(bonsaiSnapshot(tree, null, new Map()))).toBe("2 branches");
 	});
 
 	it("singularizes a lone branch and reports 'no branches yet' for an empty tree", () => {
 		const single = buildBonsaiTree([{ id: "A", children: [] }], null);
-		expect(renderBonsaiOffText({ tree: single, activeLeafId: null, spawnAt: new Map() })).toBe("1 branch");
-		expect(renderBonsaiOffText({ tree: [], activeLeafId: null, spawnAt: new Map() })).toBe("no branches yet");
+		expect(renderBonsaiOffText(bonsaiSnapshot(single, null, new Map()))).toBe("1 branch");
+		expect(renderBonsaiOffText(bonsaiSnapshot([], null, new Map()))).toBe("no branches yet");
 	});
 });
 

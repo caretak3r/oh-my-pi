@@ -1542,6 +1542,13 @@ export class Editor implements Component, Focusable {
 		return this.#state.lines.join("\n");
 	}
 
+	/** Character count of {@link getText}'s result without building the string. */
+	getTextLength(): number {
+		let length = this.#state.lines.length - 1; // "\n" separators
+		for (const line of this.#state.lines) length += line.length;
+		return length;
+	}
+
 	#expandPasteMarkers(text: string): string {
 		let result = text;
 		for (const [pasteId, pasteContent] of this.#pastes) {

@@ -21,7 +21,7 @@ function toPromptChargeContext(ctx: ExtensionContext): PromptChargeContext {
 		env: Bun.env,
 		motionSetting: readMotionSetting(),
 		theme: ctx.ui.theme,
-		getEditorText: () => ctx.ui.getEditorText(),
+		getEditorTextLength: () => ctx.ui.getEditorTextLength?.() ?? ctx.ui.getEditorText().length,
 		setWidget: (key, content, options) => ctx.ui.setWidget(key, content, options),
 	};
 }
@@ -29,12 +29,12 @@ function toPromptChargeContext(ctx: ExtensionContext): PromptChargeContext {
 /**
  * Prompt Charge: the input caret glows as a longer prompt is typed,
  * releasing in a brief flash on submit. Grounded on
- * `ExtensionContext.ui.getEditorText()` — there is no per-keystroke
+ * `ExtensionContext.ui.getEditorTextLength()` — there is no per-keystroke
  * `ExtensionEvent` anywhere in this codebase (a full sweep of
  * `extensibility/shared-events.ts` and `extensibility/extensions/types.ts`'s
  * `ExtensionEvent` union turns up nothing fired while typing; the only
  * `input` event fires once, at submit), so the widget polls
- * `getEditorText()` itself every animation frame rather than reacting to a
+ * `getEditorTextLength()` itself every animation frame rather than reacting to a
  * pushed event — the first Wave 2 feature to do so. Built on the shared
  * `@oh-my-pi/pi-animation` kit: mounted unconditionally on `session_start`
  * (an idle 0%-charge caret is itself the correct resting state to show from

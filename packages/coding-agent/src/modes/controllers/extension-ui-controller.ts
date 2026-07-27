@@ -80,6 +80,7 @@ export class ExtensionUiController {
 				this.ctx.ui.requestRender();
 			},
 			getEditorText: () => this.ctx.editor.getText(),
+			getEditorTextLength: () => this.ctx.editor.getTextLength(),
 			editor: (title, prefill, dialogOptions, editorOptions) =>
 				this.showCollabAwareEditor(title, prefill, dialogOptions, editorOptions),
 			get theme() {

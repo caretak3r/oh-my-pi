@@ -250,6 +250,14 @@ describe("Editor component", () => {
 	});
 
 	describe("public state accessors", () => {
+		it("reports the same character count as the materialized multi-line text", () => {
+			const editor = new Editor(defaultEditorTheme);
+			for (const text of ["first\nsecond", "\n", "alpha\n\nomega", "😀\n漢字\nend"]) {
+				editor.setText(text);
+				expect(editor.getTextLength()).toBe(editor.getText().length);
+			}
+		});
+
 		it("returns cursor position", () => {
 			const editor = new Editor(defaultEditorTheme);
 

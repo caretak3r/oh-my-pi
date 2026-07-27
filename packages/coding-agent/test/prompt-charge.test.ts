@@ -66,7 +66,7 @@ function recordingContext(overrides: Partial<PromptChargeContext> = {}): {
 		env: {},
 		motionSetting: "full",
 		theme: idTheme,
-		getEditorText: () => "",
+		getEditorTextLength: () => 0,
 		setWidget: (key, content) => calls.push({ key, content }),
 		...overrides,
 	};
@@ -256,12 +256,33 @@ describe("prompt charge rendering (byte-stable)", () => {
 });
 
 describe("PromptChargeWidget", () => {
-	it("polls getEditorText every frame and renders the resulting charge", () => {
+	it("samples the numeric editor length without materializing the editor text", () => {
+		const scheduler = manualScheduler();
+		const controller = new PromptChargeController({ scheduler });
+		const { ctx: baseContext, calls } = recordingContext();
+		const ctx = {
+			...baseContext,
+			getEditorText: () => {
+				throw new Error("editor text must not be materialized");
+			},
+			getEditorTextLength: () => 173,
+		};
+
+		controller.mount(ctx);
+		const factory = calls[0].content as (tui: typeof noopTui, theme: PromptChargeTheme) => PromptChargeWidget;
+		const widget = factory(noopTui, idTheme);
+		scheduler.advance(1000 / 30);
+
+		expect(controller.state.snapshot().typedChars).toBe(173);
+		widget.dispose();
+	});
+
+	it("polls getEditorTextLength every frame and renders the resulting charge", () => {
 		const scheduler = manualScheduler();
 		const policy = new MotionPolicy(fullEnv, "full");
 		const host = new AnimationHost({ policy, scheduler });
 		const state = new PromptChargeState();
-		let editorText = "";
+		let editorTextLength = 0;
 		const widget = new PromptChargeWidget({
 			tui: noopTui,
 			host,
@@ -269,14 +290,14 @@ describe("PromptChargeWidget", () => {
 			state,
 			theme: idTheme,
 			clock: scheduler,
-			getEditorText: () => editorText,
+			getEditorTextLength: () => editorTextLength,
 		});
 
 		expect(widget.animating).toBe(true);
 		expect(host.subscriberCount).toBe(1);
 
 		const initial = widget.render(80);
-		editorText = "a".repeat(300);
+		editorTextLength = 300;
 		scheduler.advance(1000 / 30);
 		const next = widget.render(80);
 		expect(next).not.toEqual(initial);
@@ -301,9 +322,9 @@ describe("PromptChargeWidget", () => {
 			state,
 			theme: idTheme,
 			clock: scheduler,
-			getEditorText: () => {
+			getEditorTextLength: () => {
 				pollCount++;
-				return "";
+				return 0;
 			},
 		});
 
@@ -618,7 +639,7 @@ describe("prompt charge hardening: controller/widget dispose-remount idempotency
 			state,
 			theme: idTheme,
 			clock: scheduler,
-			getEditorText: () => "",
+			getEditorTextLength: () => 0,
 		});
 
 		widget.dispose();
