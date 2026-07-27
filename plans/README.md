@@ -24,7 +24,7 @@ kit-owned contract so future changes stop being 16-file edits (Epic B).
 | 008 | Decide the default motion tier for `display.animations` | A · harden | P2 | S | — (needs human sign-off) | TODO |
 | 009 | Validate plugin→core setting write-through (drop the `as unknown` cast) | A · harden | P3 | S | — | DONE (`98981c443`) |
 | 004 | One shared clock + policy per session | B · rebuild | P2 | L | 001 | DONE (`169c91dd1`) |
-| 005 | Structural teardown on session switch & shutdown | B · rebuild | P2 | L | 004 | TODO |
+| 005 | Structural teardown on session switch & shutdown | B · rebuild | P2 | L | 004 | DONE (`edf5bb462`) |
 | 006 | Unify the three meanings of "animations" behind one live setting | B · rebuild | P2 | M | 004 (hard), 005 (soft) | TODO |
 | 007 | Bound per-frame work to visible output, not session history | B · rebuild | P3 | M | — (soft: 004) | DONE (`659d2da02`) |
 
