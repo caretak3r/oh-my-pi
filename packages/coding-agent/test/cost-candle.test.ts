@@ -265,16 +265,18 @@ describe("cost candle widget lifecycle", () => {
 });
 
 /** Records every `setWidget` call a controller makes, for assertions across the controller and hardening describe blocks. */
-function recordingContext(overrides: Partial<CostCandleContext> = {}): {
+function recordingContext(
+	overrides: Partial<CostCandleContext> = {},
+	scheduler: FrameScheduler = manualScheduler(),
+): {
 	ctx: CostCandleContext;
 	calls: Array<{ key: string; content: unknown }>;
 } {
 	const calls: Array<{ key: string; content: unknown }> = [];
+	const policy = new MotionPolicy(fullEnv, "full");
 	const ctx: CostCandleContext = {
 		hasUI: true,
-		isTTY: true,
-		env: {},
-		motionSetting: "full",
+		animation: { host: new AnimationHost({ policy, scheduler }), policy },
 		theme: idTheme,
 		setWidget: (key, content) => calls.push({ key, content }),
 		...overrides,
@@ -286,7 +288,7 @@ describe("cost candle controller", () => {
 	it("mounts an animated widget on the first assistant message_end and mutates state in place afterward", () => {
 		const scheduler = manualScheduler();
 		const controller = new CostCandleController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onMessageEnd(assistantMessageEnd(0.02), ctx);
 		expect(calls).toHaveLength(1);
@@ -313,7 +315,7 @@ describe("cost candle controller", () => {
 	it("renders and updates a static line for the off tier with zero frame-clock subscriptions", () => {
 		const scheduler = manualScheduler();
 		const controller = new CostCandleController({ scheduler });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 
 		controller.onMessageEnd(assistantMessageEnd(0.02), ctx);
 		expect((calls[0].content as string[])[0]).toBe("$0.02 total · $0.02/msg avg");
@@ -323,9 +325,9 @@ describe("cost candle controller", () => {
 		expect((calls[calls.length - 1].content as string[])[0]).toBe("$0.06 total · $0.03/msg avg");
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const controller = new CostCandleController();
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onMessageEnd(assistantMessageEnd(0.02), ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -339,18 +341,21 @@ describe("cost candle controller", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new CostCandleController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onMessageEnd(assistantMessageEnd(0.02), ctx);
 		const factory = calls[0].content as (tui: typeof noopTui, theme: CostCandleTheme) => CostCandleWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 });

@@ -30,6 +30,7 @@ import type {
 	TSchema,
 } from "@oh-my-pi/pi-ai";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
+import type { AnimationHost, MotionPolicy } from "@oh-my-pi/pi-animation";
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
 import type { Type as arktype } from "arktype";
@@ -200,6 +201,9 @@ export interface ExtensionUIContext {
 
 	/** Set a widget to display above or below the editor. Accepts string array or component factory. */
 	setWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
+
+	/** Session-shared animation clock+policy; absent outside interactive mode. */
+	animation?(): { host: AnimationHost; policy: MotionPolicy } | undefined;
 
 	/** Set a custom footer component, or undefined to restore the built-in footer. */
 	setFooter(factory: ExtensionUiComponentFactory | undefined): void;

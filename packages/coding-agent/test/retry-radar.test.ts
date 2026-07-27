@@ -156,16 +156,18 @@ describe("retry radar controller", () => {
 		errorMessage: "429 Too Many Requests",
 	};
 
-	function recordingContext(overrides: Partial<RetryRadarContext> = {}): {
+	function recordingContext(
+		overrides: Partial<RetryRadarContext> = {},
+		scheduler: FrameScheduler = manualScheduler(),
+	): {
 		ctx: RetryRadarContext;
 		calls: Array<{ key: string; content: unknown }>;
 	} {
 		const calls: Array<{ key: string; content: unknown }> = [];
+		const policy = new MotionPolicy(fullEnv, "full");
 		const ctx: RetryRadarContext = {
 			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
+			animation: { host: new AnimationHost({ policy, scheduler }), policy },
 			theme: idTheme,
 			setWidget: (key, content) => calls.push({ key, content }),
 			...overrides,
@@ -178,10 +180,10 @@ describe("retry radar controller", () => {
 		return () => {};
 	};
 
-	it("mounts an animated widget on start and disposes the host on settle", () => {
+	it("mounts an animated widget on start without disposing the session host on settle", () => {
 		const scheduler = manualScheduler();
-		const controller = new RetryRadarController({ scheduler, timer: immediateTimer });
-		const { ctx, calls } = recordingContext();
+		const controller = new RetryRadarController({ timer: immediateTimer });
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onStart(startEvent, ctx);
 		expect(calls).toHaveLength(1);
@@ -194,14 +196,16 @@ describe("retry radar controller", () => {
 		expect(scheduler.running).toBe(true);
 
 		controller.onEnd({ type: "auto_retry_end", success: true, attempt: 2 }, ctx);
-		// Settle fires immediately: widget cleared and frame clock torn down.
+		// Settle fires immediately: the widget is cleared, but its session host remains owned by the UI.
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 
 	it("renders a static line for the off tier and updates it to the terminal state", () => {
 		const controller = new RetryRadarController({ timer: immediateTimer });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onStart(startEvent, ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -219,9 +223,9 @@ describe("retry radar controller", () => {
 		expect(calls[calls.length - 1].content).toBeUndefined(); // cleared after settle
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const controller = new RetryRadarController({ timer: immediateTimer });
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onStart(startEvent, ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);

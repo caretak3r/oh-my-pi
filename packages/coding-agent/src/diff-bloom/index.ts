@@ -1,5 +1,3 @@
-import type { MotionSetting } from "@oh-my-pi/pi-animation";
-import { isSettingsInitialized, settings } from "../config/settings";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
 import { type DiffBloomContext, DiffBloomController } from "./controller";
 
@@ -8,18 +6,10 @@ export * from "./controller";
 export * from "./state";
 export * from "./widget";
 
-function readMotionSetting(): MotionSetting {
-	if (!isSettingsInitialized()) return "full";
-	const value = settings.get("display.animations");
-	return value === "off" || value === "subtle" || value === "full" ? value : "full";
-}
-
 function toDiffBloomContext(ctx: ExtensionContext): DiffBloomContext {
 	return {
 		hasUI: ctx.hasUI,
-		isTTY: process.stdout.isTTY === true,
-		env: Bun.env,
-		motionSetting: readMotionSetting(),
+		animation: ctx.ui.animation?.(),
 		theme: ctx.ui.theme,
 		setWidget: (key, content, options) => ctx.ui.setWidget(key, content, options),
 	};
@@ -31,9 +21,9 @@ function toDiffBloomContext(ctx: ExtensionContext): DiffBloomContext {
  * then wipes clear — grounded in `EditToolDetails.diff` off the `edit`
  * tool's `tool_result`, parsed with the same `getDiffStats` helper the
  * TUI's own tool renderer uses. Built on the shared `@oh-my-pi/pi-animation`
- * kit: one `AnimationHost` per bloom, mounted fresh on the first edit seen
- * while unmounted, and torn all the way back down (host disposed, widget
- * removed) once it wipes clear.
+ * kit: a widget subscription mounted fresh on the first edit seen while
+ * unmounted and removed once it wipes clear, while the session-owned host
+ * remains available to the rest of the animation family.
  */
 export const createDiffBloomExtension: ExtensionFactory = api => {
 	const controller = new DiffBloomController();

@@ -485,14 +485,14 @@ describe("session bonsai controller", () => {
 
 	function recordingContext(
 		sessionManager: BonsaiSessionSource,
+		scheduler: FrameScheduler,
 		overrides: Partial<SessionBonsaiContext> = {},
 	): { ctx: SessionBonsaiContext; calls: Array<{ key: string; content: unknown }> } {
 		const calls: Array<{ key: string; content: unknown }> = [];
+		const policy = new MotionPolicy(fullEnv, "full");
 		const ctx: SessionBonsaiContext = {
 			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
+			animation: { host: new AnimationHost({ policy, scheduler }), policy },
 			theme: idTheme,
 			sessionManager,
 			setWidget: (key, content) => calls.push({ key, content }),
@@ -508,7 +508,7 @@ describe("session bonsai controller", () => {
 		const scheduler = manualScheduler();
 		const controller = new SessionBonsaiController({ scheduler });
 		const source = treeSource(branchingSourceTree(), "C");
-		const { ctx, calls } = recordingContext(source);
+		const { ctx, calls } = recordingContext(source, scheduler);
 
 		controller.onSessionBranch(branchEvent, ctx);
 		expect(calls).toHaveLength(1);
@@ -527,7 +527,7 @@ describe("session bonsai controller", () => {
 		const scheduler = manualScheduler();
 		const controller = new SessionBonsaiController({ scheduler });
 		const source = treeSource(branchingSourceTree(), "C");
-		const { ctx, calls } = recordingContext(source, { motionSetting: "off" });
+		const { ctx, calls } = recordingContext(source, scheduler, { animation: undefined });
 
 		controller.onSessionBranch(branchEvent, ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -539,11 +539,11 @@ describe("session bonsai controller", () => {
 		expect((calls[1].content as string[])[0]).toBe("branch 2 of 2");
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const scheduler = manualScheduler();
 		const controller = new SessionBonsaiController({ scheduler });
 		const source = treeSource(branchingSourceTree(), "C");
-		const { ctx, calls } = recordingContext(source, { isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext(source, scheduler, { animation: undefined });
 
 		controller.onSessionBranch(branchEvent, ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -553,31 +553,35 @@ describe("session bonsai controller", () => {
 		const scheduler = manualScheduler();
 		const controller = new SessionBonsaiController({ scheduler });
 		const source = treeSource(branchingSourceTree(), "C");
-		const { ctx, calls } = recordingContext(source, { hasUI: false });
+		const { ctx, calls } = recordingContext(source, scheduler, { hasUI: false });
 
 		controller.onSessionBranch(branchEvent, ctx);
 		expect(calls).toHaveLength(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new SessionBonsaiController({ scheduler });
 		const source = treeSource(branchingSourceTree(), "C");
-		const { ctx, calls } = recordingContext(source);
+		const { ctx, calls } = recordingContext(source, scheduler);
 
 		controller.onSessionBranch(branchEvent, ctx);
 		const factory = calls[0].content as (tui: typeof noopTui, theme: BonsaiTheme) => SessionBonsaiWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 
 	it("dispose before any mount is a no-op: no setWidget call, no host to tear down", () => {
-		const controller = new SessionBonsaiController({ scheduler: manualScheduler() });
-		const { ctx, calls } = recordingContext(treeSource(branchingSourceTree(), "C"));
+		const scheduler = manualScheduler();
+		const controller = new SessionBonsaiController({ scheduler });
+		const { ctx, calls } = recordingContext(treeSource(branchingSourceTree(), "C"), scheduler);
 
 		controller.dispose(ctx);
 		expect(calls).toHaveLength(0);
@@ -586,7 +590,7 @@ describe("session bonsai controller", () => {
 	it("disposing twice is idempotent: the second call is a silent no-op", () => {
 		const scheduler = manualScheduler();
 		const controller = new SessionBonsaiController({ scheduler });
-		const { ctx, calls } = recordingContext(treeSource(branchingSourceTree(), "C"));
+		const { ctx, calls } = recordingContext(treeSource(branchingSourceTree(), "C"), scheduler);
 
 		controller.onSessionBranch(branchEvent, ctx);
 		controller.dispose(ctx);
@@ -599,7 +603,7 @@ describe("session bonsai controller", () => {
 	it("a session event after dispose remounts a fresh widget rather than staying dormant", () => {
 		const scheduler = manualScheduler();
 		const controller = new SessionBonsaiController({ scheduler });
-		const { ctx, calls } = recordingContext(treeSource(branchingSourceTree(), "C"));
+		const { ctx, calls } = recordingContext(treeSource(branchingSourceTree(), "C"), scheduler);
 
 		controller.onSessionBranch(branchEvent, ctx);
 		controller.dispose(ctx);

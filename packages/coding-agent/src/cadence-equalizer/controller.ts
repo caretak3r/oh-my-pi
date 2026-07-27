@@ -1,9 +1,9 @@
-import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, backpressureFromTui, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { FrameScheduler } from "@oh-my-pi/pi-animation";
+import { type AnimationHost, DEFAULT_FRAME_SCHEDULER } from "@oh-my-pi/pi-animation";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { MessageEndEvent, MessageStartEvent, MessageUpdateEvent } from "../extensibility/extensions/types";
 import { calculateTokensPerSecond } from "../modes/components/status-line/token-rate";
+import type { SessionAnimationHandle } from "../modes/session-animation";
 import { CadenceEqualizerState } from "./state";
 import { type CadenceEqualizerTheme, CadenceEqualizerWidget, renderEqualizerText } from "./widget";
 
@@ -25,36 +25,13 @@ const defaultWallClock: WallClock = { now: () => Date.now() };
 export interface CadenceEqualizerContext {
 	/** False in print/RPC modes with no widget surface — the field stays dormant. */
 	hasUI: boolean;
-	/** Whether stdout is a TTY (a hard gate on motion). */
-	isTTY: boolean;
-	/** Environment for `NO_COLOR`/`CI`/`TERM` gates; defaults to `Bun.env` when omitted. */
-	env?: Record<string, string | undefined>;
-	/** The resolved `animations` setting. */
-	motionSetting: MotionSetting;
+	/** Session-shared clock+policy; when absent the widget renders static. */
+	animation?: SessionAnimationHandle;
 	theme: CadenceEqualizerTheme;
 	setWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 }
 
-type Mount = { mode: "animated"; host: AnimationHost } | { mode: "static" };
-
-/**
- * The {@link AnimationHost} backpressure field must be wired at construction,
- * before the widget factory supplies the real `tui` — this adapter lets the
- * host read a live signal once {@link attach} runs from inside that factory.
- */
-function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
-	let live: BackpressureSignal | undefined;
-	return {
-		signal: {
-			get underPressure() {
-				return live?.underPressure ?? false;
-			},
-		},
-		attach(tui) {
-			live = backpressureFromTui(tui);
-		},
-	};
-}
+type Mount = { mode: "animated"; host: AnimationHost; owned: false } | { mode: "static" };
 
 /** The minimal shape `calculateTokensPerSecond` needs from an assistant `AgentMessage`. */
 interface AssistantSample {
@@ -145,10 +122,10 @@ export class CadenceEqualizerController {
 		if (this.#mount.mode === "static") this.#repaintStatic(ctx);
 	}
 
-	/** Tear down the live mount: dispose the host (if animated) and clear the widget. Idempotent. */
+	/** Clear the live widget without disposing the session-owned host. Idempotent. */
 	dispose(ctx: Pick<CadenceEqualizerContext, "setWidget">): void {
 		if (!this.#mount) return;
-		if (this.#mount.mode === "animated") this.#mount.host.dispose();
+		if (this.#mount.mode === "animated" && this.#mount.owned) this.#mount.host.dispose();
 		this.#mount = undefined;
 		ctx.setWidget(WIDGET_KEY, undefined, WIDGET_OPTIONS);
 	}
@@ -158,25 +135,21 @@ export class CadenceEqualizerController {
 	}
 
 	#mountWidget(ctx: CadenceEqualizerContext): Mount {
-		const policy = new MotionPolicy({ hasUI: ctx.hasUI, isTTY: ctx.isTTY, env: ctx.env }, ctx.motionSetting);
-		if (policy.tier === "off") {
+		const shared = ctx.animation;
+		if (!shared || shared.policy.tier === "off") {
 			ctx.setWidget(WIDGET_KEY, [renderEqualizerText(this.sampleRate(this.#wallClock.now()))], WIDGET_OPTIONS);
 			return { mode: "static" };
 		}
 
-		const backpressure = deferredBackpressure();
-		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
+		const { host, policy } = shared;
 		const state = this.#state;
 		const wallClock = this.#wallClock;
 		const sampleRate = (wallNowMs: number): number | null => this.sampleRate(wallNowMs);
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => {
-				backpressure.attach(tui);
-				return new CadenceEqualizerWidget({ tui, host, policy, state, theme, wallClock, sampleRate });
-			},
+			(tui, theme) => new CadenceEqualizerWidget({ tui, host, policy, state, theme, wallClock, sampleRate }),
 			WIDGET_OPTIONS,
 		);
-		return { mode: "animated", host };
+		return { mode: "animated", host, owned: false };
 	}
 }

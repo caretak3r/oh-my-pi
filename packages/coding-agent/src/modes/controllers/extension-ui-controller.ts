@@ -22,6 +22,7 @@ import { createExtensionModelQuery } from "../../extensibility/extensions/model-
 import { HookEditorComponent } from "../../modes/components/hook-editor";
 import { HookInputComponent } from "../../modes/components/hook-input";
 import { HookSelectorComponent, type HookSelectorSlider } from "../../modes/components/hook-selector";
+import { sessionAnimation } from "../../modes/session-animation";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "../../modes/types";
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -69,6 +70,7 @@ export class ExtensionUiController {
 			setStatus: (key, text) => this.setHookStatus(key, text),
 			setWorkingMessage: message => this.ctx.setWorkingMessage(message),
 			setWidget: (key, content, options) => this.setHookWidget(key, content, options),
+			animation: () => sessionAnimation(this.ctx.ui),
 			setTitle: title => setTerminalTitle(title),
 			custom: (factory, options) => this.showHookCustom(factory, options),
 			setEditorText: text => {

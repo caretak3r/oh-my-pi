@@ -1,8 +1,8 @@
-import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, backpressureFromTui, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { FrameScheduler } from "@oh-my-pi/pi-animation";
+import { type AnimationHost, DEFAULT_FRAME_SCHEDULER } from "@oh-my-pi/pi-animation";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { AgentEndEvent, AgentStartEvent, TurnEndEvent, TurnStartEvent } from "../extensibility/extensions/types";
+import type { SessionAnimationHandle } from "../modes/session-animation";
 import { BreathingBorderState } from "./state";
 import { type BreathingBorderTheme, BreathingBorderWidget, renderBreathingBorderOffText } from "./widget";
 
@@ -17,36 +17,13 @@ const WIDGET_OPTIONS: ExtensionWidgetOptions = { placement: "aboveEditor" };
 export interface BreathingBorderContext {
 	/** False in print/RPC modes with no widget surface — the field stays dormant. */
 	hasUI: boolean;
-	/** Whether stdout is a TTY (a hard gate on motion). */
-	isTTY: boolean;
-	/** Environment for `NO_COLOR`/`CI`/`TERM` gates; defaults to `Bun.env` when omitted. */
-	env?: Record<string, string | undefined>;
-	/** The resolved `animations` setting. */
-	motionSetting: MotionSetting;
+	/** Session-shared clock+policy; when absent the widget renders static. */
+	animation?: SessionAnimationHandle;
 	theme: BreathingBorderTheme;
 	setWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 }
 
-type Mount = { mode: "off" } | { mode: "animated"; host: AnimationHost } | { mode: "settled" };
-
-/**
- * The {@link AnimationHost} backpressure field must be wired at construction,
- * before the widget factory supplies the real `tui` — this adapter lets the
- * host read a live signal once {@link attach} runs from inside that factory.
- */
-function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
-	let live: BackpressureSignal | undefined;
-	return {
-		signal: {
-			get underPressure() {
-				return live?.underPressure ?? false;
-			},
-		},
-		attach(tui) {
-			live = backpressureFromTui(tui);
-		},
-	};
-}
+type Mount = { mode: "off" } | { mode: "animated"; host: AnimationHost; owned: false } | { mode: "settled" };
 
 /**
  * Drives the breathing border: `agent_start` (re)starts the continuous
@@ -59,10 +36,10 @@ function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<
  * resolved tier of `off` renders a fixed static border instead of an
  * animated widget. Once the wind-down exhale settles into `idle` (the
  * `BreathingBorderState.settleIfDone` transition, surfaced via the widget's
- * `onSettled` callback), the controller disposes the animated host and falls
- * back to the same static widget — so a fully idle session really does carry
- * zero frame-clock subscriptions, not just an animated widget that stopped
- * changing. A later `agent_start` remounts fresh.
+ * `onSettled` callback), the controller replaces the widget with the same
+ * static row. The UI disposes the old widget subscription while the shared
+ * session host remains available to sibling animations. A later
+ * `agent_start` remounts fresh.
  */
 export class BreathingBorderController {
 	#scheduler: FrameScheduler;
@@ -104,41 +81,37 @@ export class BreathingBorderController {
 		this.#state.applyTurnEnd(event.turnIndex, this.#scheduler.now());
 	}
 
-	/** Tear down any live mount (animated host, if one exists) and clear the widget. Idempotent. */
+	/** Clear any live widget without disposing the session-owned host. Idempotent. */
 	dispose(ctx: Pick<BreathingBorderContext, "setWidget">): void {
 		if (!this.#mount) return;
-		if (this.#mount.mode === "animated") this.#mount.host.dispose();
+		if (this.#mount.mode === "animated" && this.#mount.owned) this.#mount.host.dispose();
 		this.#mount = undefined;
 		ctx.setWidget(WIDGET_KEY, undefined, WIDGET_OPTIONS);
 	}
 
 	#mountWidget(ctx: BreathingBorderContext): Mount {
-		const policy = new MotionPolicy({ hasUI: ctx.hasUI, isTTY: ctx.isTTY, env: ctx.env }, ctx.motionSetting);
-		if (policy.tier === "off") {
+		const shared = ctx.animation;
+		if (!shared || shared.policy.tier === "off") {
 			ctx.setWidget(WIDGET_KEY, [renderBreathingBorderOffText(ctx.theme)], WIDGET_OPTIONS);
 			return { mode: "off" };
 		}
 
-		const backpressure = deferredBackpressure();
-		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
+		const { host, policy } = shared;
 		const state = this.#state;
 		const clock = this.#scheduler;
 		const onSettled = () => this.#teardownToStatic(ctx, host);
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => {
-				backpressure.attach(tui);
-				return new BreathingBorderWidget({ tui, host, policy, state, theme, clock, onSettled });
-			},
+			(tui, theme) => new BreathingBorderWidget({ tui, host, policy, state, theme, clock, onSettled }),
 			WIDGET_OPTIONS,
 		);
-		return { mode: "animated", host };
+		return { mode: "animated", host, owned: false };
 	}
 
 	/** Fires once, from the widget's `onSettled` callback, on the `exhaling` -> `idle` transition. Guards against a stale callback from an already-superseded mount (e.g. a fresh `agent_start` remounted before this one settled). */
 	#teardownToStatic(ctx: Pick<BreathingBorderContext, "setWidget" | "theme">, host: AnimationHost): void {
 		if (this.#mount?.mode !== "animated" || this.#mount.host !== host) return;
-		host.dispose();
+		if (this.#mount.owned) host.dispose();
 		this.#mount = { mode: "settled" };
 		ctx.setWidget(WIDGET_KEY, [renderBreathingBorderOffText(ctx.theme)], WIDGET_OPTIONS);
 	}

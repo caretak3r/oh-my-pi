@@ -51,16 +51,18 @@ function manualScheduler(): FrameScheduler & { advance(ms: number): void; readon
 const fullEnv = { hasUI: true, isTTY: true, env: {} as Record<string, string | undefined> };
 
 /** Records every `setWidget` call for assertion, with sensible full-motion defaults. */
-function recordingContext(overrides: Partial<DiffBloomContext> = {}): {
+function recordingContext(
+	overrides: Partial<DiffBloomContext> = {},
+	scheduler: FrameScheduler = manualScheduler(),
+): {
 	ctx: DiffBloomContext;
 	calls: Array<{ key: string; content: unknown }>;
 } {
 	const calls: Array<{ key: string; content: unknown }> = [];
+	const policy = new MotionPolicy(fullEnv, "full");
 	const ctx: DiffBloomContext = {
 		hasUI: true,
-		isTTY: true,
-		env: {},
-		motionSetting: "full",
+		animation: { host: new AnimationHost({ policy, scheduler }), policy },
 		theme: idTheme,
 		setWidget: (key, content) => calls.push({ key, content }),
 		...overrides,
@@ -420,7 +422,7 @@ describe("diff bloom controller", () => {
 	it("mounts an animated widget on the first edit tool_result with a real, non-empty diff", () => {
 		const scheduler = manualScheduler();
 		const controller = new DiffBloomController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onToolResult(editResult(sampleDiff, { path: "src/foo.ts" }), ctx);
 		expect(calls).toHaveLength(1);
@@ -485,7 +487,7 @@ describe("diff bloom controller", () => {
 	it("a second edit while still blooming restarts the flower without a second mount call", () => {
 		const scheduler = manualScheduler();
 		const controller = new DiffBloomController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onToolResult(editResult(sampleDiff, { path: "a.ts" }), ctx);
 		scheduler.advance(100);
@@ -497,7 +499,7 @@ describe("diff bloom controller", () => {
 	it("settles back to fully unmounted after the bloom wipes clear, then a later edit remounts fresh", () => {
 		const scheduler = manualScheduler();
 		const controller = new DiffBloomController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onToolResult(editResult(sampleDiff, { path: "a.ts" }), ctx);
 		const factory = calls[0].content as (tui: ToggleTui, theme: DiffBloomTheme) => DiffBloomWidget;
@@ -508,8 +510,10 @@ describe("diff bloom controller", () => {
 
 		scheduler.advance(BLOOM_DURATION_MS);
 		expect(controller.state.phase).toBe("idle");
-		expect(scheduler.running).toBe(false); // the animated host was disposed on settle
+		expect(scheduler.running).toBe(true); // replacing the widget, not the controller, owns unsubscription
 		expect(calls[calls.length - 1].content).toBeUndefined(); // widget removed entirely, not left as a static row
+		widget.dispose();
+		expect(scheduler.running).toBe(false);
 
 		controller.onToolResult(editResult(sampleDiff, { path: "c.ts" }), ctx);
 		expect(typeof calls[calls.length - 1].content).toBe("function"); // remounted fresh
@@ -518,7 +522,7 @@ describe("diff bloom controller", () => {
 	it("renders a static line naming the path and counts for the off tier, refreshed on each edit", () => {
 		const scheduler = manualScheduler();
 		const controller = new DiffBloomController({ scheduler });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 
 		controller.onToolResult(editResult(sampleDiff, { path: "a.ts" }), ctx);
 		expect(calls[0].content).toEqual([renderDiffBloomOffText(controller.state.snapshot())]);
@@ -528,9 +532,9 @@ describe("diff bloom controller", () => {
 		expect(calls[calls.length - 1].content).toEqual([renderDiffBloomOffText(controller.state.snapshot())]);
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const controller = new DiffBloomController();
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onToolResult(editResult(sampleDiff), ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -544,18 +548,21 @@ describe("diff bloom controller", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new DiffBloomController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onToolResult(editResult(sampleDiff), ctx);
 		const factory = calls[0].content as (tui: ToggleTui, theme: DiffBloomTheme) => DiffBloomWidget;
-		factory(new ToggleTui(), idTheme);
+		const widget = factory(new ToggleTui(), idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 

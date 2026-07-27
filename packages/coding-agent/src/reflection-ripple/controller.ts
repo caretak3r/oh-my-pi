@@ -1,8 +1,8 @@
-import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, backpressureFromTui, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { FrameScheduler } from "@oh-my-pi/pi-animation";
+import { type AnimationHost, DEFAULT_FRAME_SCHEDULER } from "@oh-my-pi/pi-animation";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { TtsrTriggeredEvent } from "../extensibility/extensions/types";
+import type { SessionAnimationHandle } from "../modes/session-animation";
 import { ReflectionRippleState } from "./state";
 import { type ReflectionRippleTheme, ReflectionRippleWidget, renderReflectionRippleOffText } from "./widget";
 
@@ -17,36 +17,13 @@ const WIDGET_OPTIONS: ExtensionWidgetOptions = { placement: "aboveEditor" };
 export interface ReflectionRippleContext {
 	/** False in print/RPC modes with no widget surface — the field stays dormant. */
 	hasUI: boolean;
-	/** Whether stdout is a TTY (a hard gate on motion). */
-	isTTY: boolean;
-	/** Environment for `NO_COLOR`/`CI`/`TERM` gates; defaults to `Bun.env` when omitted. */
-	env?: Record<string, string | undefined>;
-	/** The resolved `animations` setting. */
-	motionSetting: MotionSetting;
+	/** Session-shared clock+policy; when absent the widget renders static. */
+	animation?: SessionAnimationHandle;
 	theme: ReflectionRippleTheme;
 	setWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 }
 
-type Mount = { mode: "animated"; host: AnimationHost } | { mode: "off" };
-
-/**
- * The {@link AnimationHost} backpressure field must be wired at construction,
- * before the widget factory supplies the real `tui` — this adapter lets the
- * host read a live signal once {@link attach} runs from inside that factory.
- */
-function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
-	let live: BackpressureSignal | undefined;
-	return {
-		signal: {
-			get underPressure() {
-				return live?.underPressure ?? false;
-			},
-		},
-		attach(tui) {
-			live = backpressureFromTui(tui);
-		},
-	};
-}
+type Mount = { mode: "animated"; host: AnimationHost; owned: false } | { mode: "off" };
 
 /**
  * Drives Reflection Ripple: each `ttsr_triggered` event — TTSR interrupting
@@ -59,9 +36,9 @@ function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<
  * resolved tier of `off` instead renders a static line naming the matched
  * rule(s), refreshed on each trigger. Once the ripple settles (the
  * `ReflectionRippleState.settleIfDone` transition, surfaced via the widget's
- * `onSettled` callback), the controller disposes the animated host and
- * removes the widget entirely — a settled reflection leaves zero
- * subscriptions and no lingering visual. A later trigger remounts fresh.
+ * `onSettled` callback), the controller removes the widget entirely. The UI
+ * drops that subscription while the shared session host remains available
+ * to siblings. A later trigger remounts fresh.
  */
 export class ReflectionRippleController {
 	#scheduler: FrameScheduler;
@@ -92,41 +69,37 @@ export class ReflectionRippleController {
 		// Animated mode: the shared AnimationHost's next tick re-renders the restarted ripple from the mutated state.
 	}
 
-	/** Tear down any live mount (animated host, if one exists) and clear the widget. Idempotent. */
+	/** Clear any live widget without disposing the session-owned host. Idempotent. */
 	dispose(ctx: Pick<ReflectionRippleContext, "setWidget">): void {
 		if (!this.#mount) return;
-		if (this.#mount.mode === "animated") this.#mount.host.dispose();
+		if (this.#mount.mode === "animated" && this.#mount.owned) this.#mount.host.dispose();
 		this.#mount = undefined;
 		ctx.setWidget(WIDGET_KEY, undefined, WIDGET_OPTIONS);
 	}
 
 	#mountWidget(ctx: ReflectionRippleContext): Mount {
-		const policy = new MotionPolicy({ hasUI: ctx.hasUI, isTTY: ctx.isTTY, env: ctx.env }, ctx.motionSetting);
-		if (policy.tier === "off") {
+		const shared = ctx.animation;
+		if (!shared || shared.policy.tier === "off") {
 			ctx.setWidget(WIDGET_KEY, [renderReflectionRippleOffText(this.#state.snapshot().ruleNames)], WIDGET_OPTIONS);
 			return { mode: "off" };
 		}
 
-		const backpressure = deferredBackpressure();
-		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
+		const { host, policy } = shared;
 		const state = this.#state;
 		const clock = this.#scheduler;
 		const onSettled = () => this.#teardownToNothing(ctx, host);
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => {
-				backpressure.attach(tui);
-				return new ReflectionRippleWidget({ tui, host, policy, state, theme, clock, onSettled });
-			},
+			(tui, theme) => new ReflectionRippleWidget({ tui, host, policy, state, theme, clock, onSettled }),
 			WIDGET_OPTIONS,
 		);
-		return { mode: "animated", host };
+		return { mode: "animated", host, owned: false };
 	}
 
 	/** Fires once, from the widget's `onSettled` callback, on the `rippling` -> `idle` transition. Guards against a stale callback from an already-superseded mount (e.g. a fresh trigger remounted before this one settled). */
 	#teardownToNothing(ctx: Pick<ReflectionRippleContext, "setWidget">, host: AnimationHost): void {
 		if (this.#mount?.mode !== "animated" || this.#mount.host !== host) return;
-		host.dispose();
+		if (this.#mount.owned) host.dispose();
 		this.#mount = undefined;
 		ctx.setWidget(WIDGET_KEY, undefined, WIDGET_OPTIONS);
 	}

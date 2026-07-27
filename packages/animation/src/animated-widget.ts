@@ -124,7 +124,9 @@ export abstract class AnimatedWidget implements Component {
 	}
 
 	#subscribeToHost(): void {
-		this.#unsubscribe = this.#host.subscribe((_frame, elapsedMs) => this.#handleFrame(elapsedMs));
+		this.#unsubscribe = this.#host.subscribe((_frame, elapsedMs) => this.#handleFrame(elapsedMs), {
+			cadenceMs: () => this.#policy.cadenceMs,
+		});
 	}
 
 	/**

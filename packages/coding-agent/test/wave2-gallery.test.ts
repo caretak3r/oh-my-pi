@@ -2,7 +2,6 @@
 // together in one shared session (one shared `setWidget` spy), unlike the
 // per-feature test files which each mount only their own controller in isolation.
 import { describe, expect, test } from "bun:test";
-import type { MotionSetting } from "@oh-my-pi/pi-animation";
 import {
 	type AgentFleetContext,
 	AgentFleetController,
@@ -263,19 +262,15 @@ interface MountedGallery {
  * Constructs all 15 Wave 2 controllers, each wired to its own feature-shaped
  * fake context, but all sharing ONE `setWidget` spy — then drives each
  * through its representative "active" event (mirroring the driving call
- * each feature's own test file already uses). `motionSetting: "off"` forces
- * every controller's `MotionPolicy` to the `off` tier (see
- * `resolveMotionTier`), so every `setWidget` call carries a plain `string[]`
- * instead of an animated-widget factory — no fake `TUI` needed.
+ * each feature's own test file already uses). Omitting the session animation
+ * handle makes every `setWidget` call carry a plain `string[]` instead of an
+ * animated-widget factory — no fake `TUI` needed.
  */
 function mountGallery(): MountedGallery {
 	const calls: CapturedWidgetCall[] = [];
 	const disposers: Array<{ feature: string; dispose: () => void }> = [];
 	const base = {
 		hasUI: true,
-		isTTY: true,
-		env: {} as Record<string, string | undefined>,
-		motionSetting: "off" as MotionSetting,
 		theme: idTheme,
 	};
 	function widget(feature: string) {
@@ -410,7 +405,11 @@ function mountGallery(): MountedGallery {
 	}
 
 	{
-		const ctx: PromptChargeContext = { ...base, getEditorText: () => "", setWidget: widget("prompt-charge") };
+		const ctx: PromptChargeContext = {
+			...base,
+			getEditorText: () => "",
+			setWidget: widget("prompt-charge"),
+		};
 		const controller = new PromptChargeController();
 		controller.mount(ctx);
 		controller.onInput(inputEvent("x".repeat(80)), ctx);

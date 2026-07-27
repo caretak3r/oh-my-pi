@@ -84,11 +84,25 @@ describe("AnimationHost coalescing", () => {
 	it("shares one timer across N subscribers and stops on last unsubscribe", () => {
 		const scheduler = new FakeScheduler();
 		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		let firstFrames = 0;
+		let secondFrames = 0;
 
-		const unsubs = [host.subscribe(() => {}), host.subscribe(() => {}), host.subscribe(() => {})];
+		const unsubs = [
+			host.subscribe(() => {
+				firstFrames++;
+			}),
+			host.subscribe(() => {
+				secondFrames++;
+			}),
+			host.subscribe(() => {}),
+		];
 		expect(host.subscriberCount).toBe(3);
 		expect(scheduler.activeTimers).toBe(1);
 		expect(scheduler.startCount).toBe(1);
+
+		scheduler.advance(TIER_CADENCE_MS.full * 2 + 1);
+		expect(firstFrames).toBe(2);
+		expect(secondFrames).toBe(2);
 
 		unsubs[0]!();
 		unsubs[1]!();
@@ -98,6 +112,54 @@ describe("AnimationHost coalescing", () => {
 		expect(host.subscriberCount).toBe(0);
 		expect(scheduler.activeTimers).toBe(0);
 		expect(host.running).toBe(false);
+	});
+
+	it("filters a subscriber cadence while keeping the host at full cadence", () => {
+		const scheduler = new FakeScheduler();
+		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		let unfilteredFrames = 0;
+		let filteredFrames = 0;
+
+		host.subscribe(() => {
+			unfilteredFrames++;
+		});
+		host.subscribe(
+			() => {
+				filteredFrames++;
+			},
+			{ cadenceMs: () => TIER_CADENCE_MS.subtle },
+		);
+
+		scheduler.advance(1000);
+
+		expect(scheduler.startCount).toBe(1);
+		expect(scheduler.activeTimers).toBe(1);
+		expect(unfilteredFrames).toBeGreaterThanOrEqual(29);
+		expect(unfilteredFrames).toBeLessThanOrEqual(30);
+		expect(filteredFrames).toBeGreaterThanOrEqual(10);
+		expect(filteredFrames).toBeLessThanOrEqual(12);
+	});
+
+	it("never emits to a cadence-zero subscriber while siblings still receive frames", () => {
+		const scheduler = new FakeScheduler();
+		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		let unfilteredFrames = 0;
+		let stoppedFrames = 0;
+
+		host.subscribe(() => {
+			unfilteredFrames++;
+		});
+		host.subscribe(
+			() => {
+				stoppedFrames++;
+			},
+			{ cadenceMs: () => 0 },
+		);
+
+		scheduler.advance(TIER_CADENCE_MS.full * 3 + 1);
+
+		expect(unfilteredFrames).toBe(3);
+		expect(stoppedFrames).toBe(0);
 	});
 
 	it("restarts the timer when a subscriber returns after the host went idle", () => {

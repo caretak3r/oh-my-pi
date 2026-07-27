@@ -1,7 +1,6 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { AnimationHost, backpressureFromTui, MotionPolicy } from "@oh-my-pi/pi-animation";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
@@ -36,6 +35,7 @@ import { nextActionableTask } from "../../tools/todo";
 import { SpeechEnhancer } from "../../tts/speech-enhancer";
 import { vocalizer } from "../../tts/vocalizer";
 import { canonicalizeMessage } from "../../utils/thinking-display";
+import { disposeSessionAnimation, type SessionAnimationHandle, sessionAnimation } from "../session-animation";
 import { interruptHint } from "../shared";
 import { createAssistantMessageComponent } from "../utils/interactive-context-helpers";
 import { assistantUsageIsBilled } from "../utils/transcript-render-helpers";
@@ -121,10 +121,6 @@ export class EventController {
 	#prevHideThinking = false;
 	#handlers: AgentSessionEventHandlers;
 	#terminalProgressActive = false;
-	// Shared animation-kit host/policy for ambient animated widgets, created lazily
-	// on first use and reused across compactions. Disposed with the controller.
-	#animationHost: AnimationHost | undefined;
-	#motionPolicy: MotionPolicy | undefined;
 	// Live compaction condense animation (replaces the plain loader when motion is
 	// on); the before-token snapshot feeds the settle line rendered on end.
 	#compactionVacuum: CompactionVacuumWidget | undefined;
@@ -215,9 +211,7 @@ export class EventController {
 		this.#setTerminalProgress(false);
 		this.#compactionVacuum?.dispose();
 		this.#compactionVacuum = undefined;
-		this.#animationHost?.dispose();
-		this.#animationHost = undefined;
-		this.#motionPolicy = undefined;
+		disposeSessionAnimation(this.ctx.ui);
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
 		}
@@ -231,19 +225,8 @@ export class EventController {
 	 * settings change is honored. The policy resolves `off` on its own for
 	 * non-TTY / CI / NO_COLOR / backpressure, which is the static-fallback gate.
 	 */
-	#ensureAnimation(): { host: AnimationHost; policy: MotionPolicy } {
-		if (!this.#animationHost || !this.#motionPolicy) {
-			const backpressure = backpressureFromTui(this.ctx.ui);
-			this.#motionPolicy = new MotionPolicy(
-				{ hasUI: true, isTTY: process.stdout.isTTY === true, backpressure },
-				this.ctx.settings.get("display.animations"),
-			);
-			this.#animationHost = new AnimationHost({ policy: this.#motionPolicy, backpressure });
-		} else {
-			this.#motionPolicy.setSetting(this.ctx.settings.get("display.animations"));
-			this.#motionPolicy.refresh();
-		}
-		return { host: this.#animationHost, policy: this.#motionPolicy };
+	#ensureAnimation(): SessionAnimationHandle {
+		return sessionAnimation(this.ctx.ui);
 	}
 
 	#resetReadGroup(): void {

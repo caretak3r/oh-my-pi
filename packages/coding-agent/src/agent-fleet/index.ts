@@ -1,5 +1,3 @@
-import type { MotionSetting } from "@oh-my-pi/pi-animation";
-import { isSettingsInitialized, settings } from "../config/settings";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
 import { AgentRegistry } from "../registry/agent-registry";
 import { type AgentFleetContext, AgentFleetController } from "./controller";
@@ -9,18 +7,10 @@ export * from "./firefly";
 export * from "./state";
 export * from "./widget";
 
-function readMotionSetting(): MotionSetting {
-	if (!isSettingsInitialized()) return "full";
-	const value = settings.get("display.animations");
-	return value === "off" || value === "subtle" || value === "full" ? value : "full";
-}
-
 function toAgentFleetContext(ctx: ExtensionContext): AgentFleetContext {
 	return {
 		hasUI: ctx.hasUI,
-		isTTY: process.stdout.isTTY === true,
-		env: Bun.env,
-		motionSetting: readMotionSetting(),
+		animation: ctx.ui.animation?.(),
 		theme: ctx.ui.theme,
 		setWidget: (key, content, options) => ctx.ui.setWidget(key, content, options),
 	};

@@ -22,6 +22,7 @@ import {
 } from "@oh-my-pi/pi-animation";
 import type { ContextUsage, ExtensionAPI, ExtensionContext, Theme } from "@oh-my-pi/pi-coding-agent";
 import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
+import { sessionAnimation } from "@oh-my-pi/pi-coding-agent/modes/session-animation";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import type { WeatherForecast } from "./model";
 import type { BarometerCaps } from "./renderer";
@@ -35,6 +36,7 @@ const PLUGIN_NAME = "@oh-my-pi/context-weather";
 interface MountedWidget {
 	widget: ContextWeatherWidget;
 	host: AnimationHost;
+	ownedHost: boolean;
 	policy: MotionPolicy;
 	tui: TUI;
 	style: ContextWeatherSettings["style"];
@@ -112,7 +114,10 @@ export function createContextWeatherExtension(
 				(tui: TUI, theme: Theme) => {
 					const backpressure = backpressureFromTui(tui);
 					const policy = new MotionPolicy(motionEnvironment(tui), settings.animations);
-					const host = new AnimationHost({ policy, backpressure, scheduler: options.scheduler });
+					const ownedHost = options.scheduler !== undefined;
+					const host = ownedHost
+						? new AnimationHost({ policy, backpressure, scheduler: options.scheduler })
+						: sessionAnimation(tui).host;
 					const widget = new ContextWeatherWidget({
 						tui,
 						host,
@@ -127,6 +132,7 @@ export function createContextWeatherExtension(
 					mounted = {
 						widget,
 						host,
+						ownedHost,
 						policy,
 						tui,
 						style: settings.style,
@@ -142,7 +148,7 @@ export function createContextWeatherExtension(
 		const unmount = (ctx: ExtensionContext): void => {
 			if (mounted) {
 				mounted.widget.dispose();
-				mounted.host.dispose();
+				if (mounted.ownedHost) mounted.host.dispose();
 				mounted = undefined;
 			}
 			if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
