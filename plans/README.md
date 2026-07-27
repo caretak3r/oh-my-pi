@@ -20,7 +20,7 @@ kit-owned contract so future changes stop being 16-file edits (Epic B).
 |------|-------|------|----------|--------|------------|--------|
 | 001 | Fail-open error boundary on the animation frame path | A · harden | P1 | S | — | DONE (`2acb42799`, branch `relay/e7466a84f-animation-error-boundary`) |
 | 002 | Gate the 16 animation extensions behind the interactive-UI signal | A · harden | P1 | S | — | DONE (`38286eac9`) |
-| 003 | Make the compaction condense animation re-entrant + fall back safely | A · harden | P1 | S | — | TODO |
+| 003 | Make the compaction condense animation re-entrant + fall back safely | A · harden | P1 | S | — | DONE (`8f860f4c8`) |
 | 008 | Decide the default motion tier for `display.animations` | A · harden | P2 | S | — (needs human sign-off) | TODO |
 | 009 | Validate plugin→core setting write-through (drop the `as unknown` cast) | A · harden | P3 | S | — | TODO |
 | 004 | One shared clock + policy per session | B · rebuild | P2 | L | 001 | TODO |
