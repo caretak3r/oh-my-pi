@@ -22,7 +22,7 @@ kit-owned contract so future changes stop being 16-file edits (Epic B).
 | 002 | Gate the 16 animation extensions behind the interactive-UI signal | A · harden | P1 | S | — | DONE (`38286eac9`) |
 | 003 | Make the compaction condense animation re-entrant + fall back safely | A · harden | P1 | S | — | DONE (`8f860f4c8`) |
 | 008 | Decide the default motion tier for `display.animations` | A · harden | P2 | S | — (needs human sign-off) | TODO |
-| 009 | Validate plugin→core setting write-through (drop the `as unknown` cast) | A · harden | P3 | S | — | TODO |
+| 009 | Validate plugin→core setting write-through (drop the `as unknown` cast) | A · harden | P3 | S | — | DONE (`98981c443`) |
 | 004 | One shared clock + policy per session | B · rebuild | P2 | L | 001 | TODO |
 | 005 | Structural teardown on session switch & shutdown | B · rebuild | P2 | L | 004 | TODO |
 | 006 | Unify the three meanings of "animations" behind one live setting | B · rebuild | P2 | M | 004 (hard), 005 (soft) | TODO |
