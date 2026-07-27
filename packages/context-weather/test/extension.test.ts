@@ -14,12 +14,17 @@ class ExtensionHarness {
 	notifications: string[] = [];
 	placement: string | undefined;
 	widget: ContextWeatherWidget | undefined;
+	widgetCalls: Array<{ content: unknown }> = [];
 	renderRequests = 0;
 
 	#scheduler = new FakeScheduler();
 	#ctx: ExtensionContext;
 
-	constructor(stored: Record<string, unknown> = {}, env: Record<string, string | undefined> = {}) {
+	constructor(
+		stored: Record<string, unknown> = {},
+		env: Record<string, string | undefined> = {},
+		readPluginSettings?: (cwd: string) => Promise<Record<string, unknown>>,
+	) {
 		this.stored = stored;
 
 		const tui = {
@@ -36,6 +41,7 @@ class ExtensionHarness {
 			getContextUsage: () => this.usage,
 			ui: {
 				setWidget: (_key: string, content: unknown, options?: { placement?: string }) => {
+					this.widgetCalls.push({ content });
 					if (options?.placement !== undefined) this.placement = options.placement;
 					if (typeof content === "function") {
 						this.widget = (content as (tui: TUI, theme: Theme) => ContextWeatherWidget)(tui, fakeTheme());
@@ -50,7 +56,7 @@ class ExtensionHarness {
 		} as unknown as ExtensionContext;
 
 		const options: ContextWeatherExtensionOptions = {
-			readPluginSettings: async () => this.stored,
+			readPluginSettings: readPluginSettings ?? (async () => this.stored),
 			env,
 			motionEnvironment: () => ({ hasUI: true, isTTY: true, env: {} }),
 			scheduler: this.#scheduler,
@@ -185,5 +191,19 @@ describe("context weather extension settings wiring", () => {
 		} finally {
 			await harness.shutdown();
 		}
+	});
+
+	it("does not install a widget when shutdown overtakes a pending settings read", async () => {
+		const settings = Promise.withResolvers<Record<string, unknown>>();
+		const harness = new ExtensionHarness({}, {}, async () => settings.promise);
+		const mounting = harness.emit("session_start");
+
+		await harness.emit("session_shutdown");
+		const callsAtShutdown = harness.widgetCalls.length;
+		settings.resolve({ animations: "full" });
+		await mounting;
+
+		expect(harness.widgetCalls.slice(callsAtShutdown).some(call => call.content !== undefined)).toBe(false);
+		expect(harness.widget).toBeUndefined();
 	});
 });

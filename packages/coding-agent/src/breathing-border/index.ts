@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type BreathingBorderContext, BreathingBorderController } from "./controller";
 
 export * from "./breath";
@@ -39,5 +40,9 @@ export const createBreathingBorderExtension: ExtensionFactory = api => {
 	});
 	api.on("turn_end", (event, ctx) => {
 		controller.onTurnEnd(event, toBreathingBorderContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toBreathingBorderContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

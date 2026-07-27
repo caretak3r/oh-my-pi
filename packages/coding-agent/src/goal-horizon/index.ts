@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type GoalHorizonContext, GoalHorizonController } from "./controller";
 
 export * from "./controller";
@@ -31,4 +32,8 @@ function toGoalHorizonContext(ctx: ExtensionContext): GoalHorizonContext {
 export const createGoalHorizonExtension: ExtensionFactory = api => {
 	const controller = new GoalHorizonController();
 	api.on("goal_updated", (event, ctx) => controller.onGoalUpdated(event, toGoalHorizonContext(ctx)));
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toGoalHorizonContext,
+		dispose: ctx => controller.dispose(ctx),
+	});
 };

@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type RetryRadarContext, RetryRadarController } from "./controller";
 
 export * from "./controller";
@@ -27,5 +28,9 @@ export const createRetryRadarExtension: ExtensionFactory = api => {
 	});
 	api.on("auto_retry_end", (event, ctx) => {
 		controller.onEnd(event, toRadarContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toRadarContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

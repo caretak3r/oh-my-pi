@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type ReflectionRippleContext, ReflectionRippleController } from "./controller";
 
 export * from "./controller";
@@ -29,5 +30,9 @@ export const createReflectionRippleExtension: ExtensionFactory = api => {
 	const controller = new ReflectionRippleController();
 	api.on("ttsr_triggered", (event, ctx) => {
 		controller.onTtsrTriggered(event, toReflectionRippleContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toReflectionRippleContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type DiffBloomContext, DiffBloomController } from "./controller";
 
 export * from "./bloom";
@@ -29,5 +30,9 @@ export const createDiffBloomExtension: ExtensionFactory = api => {
 	const controller = new DiffBloomController();
 	api.on("tool_result", (event, ctx) => {
 		controller.onToolResult(event, toDiffBloomContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toDiffBloomContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type MemoryCrystalsContext, MemoryCrystalsController } from "./controller";
 
 export * from "./controller";
@@ -30,4 +31,8 @@ function toMemoryCrystalsContext(ctx: ExtensionContext): MemoryCrystalsContext {
 export const createMemoryCrystalsExtension: ExtensionFactory = api => {
 	const controller = new MemoryCrystalsController();
 	api.on("auto_compaction_end", (event, ctx) => controller.onAutoCompactionEnd(event, toMemoryCrystalsContext(ctx)));
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toMemoryCrystalsContext,
+		dispose: ctx => controller.dispose(ctx),
+	});
 };

@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type CostCandleContext, CostCandleController } from "./controller";
 
 export * from "./candle";
@@ -30,4 +31,8 @@ function toCostCandleContext(ctx: ExtensionContext): CostCandleContext {
 export const createCostCandleExtension: ExtensionFactory = api => {
 	const controller = new CostCandleController();
 	api.on("message_end", (event, ctx) => controller.onMessageEnd(event, toCostCandleContext(ctx)));
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toCostCandleContext,
+		dispose: ctx => controller.dispose(ctx),
+	});
 };

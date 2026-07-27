@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { AgentRegistry } from "../registry/agent-registry";
 import { type AgentFleetContext, AgentFleetController } from "./controller";
 
@@ -32,5 +33,9 @@ function toAgentFleetContext(ctx: ExtensionContext): AgentFleetContext {
 export const createAgentFleetExtension: ExtensionFactory = api => {
 	const controller = new AgentFleetController({ registry: AgentRegistry.global() });
 	api.on("session_start", (_event, ctx) => controller.watch(toAgentFleetContext(ctx)));
-	api.on("session_shutdown", (_event, ctx) => controller.dispose(toAgentFleetContext(ctx)));
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toAgentFleetContext,
+		dispose: ctx => controller.dispose(ctx),
+		remountOnSwitch: ctx => controller.watch(ctx),
+	});
 };

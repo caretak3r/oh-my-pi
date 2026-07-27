@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type TodoMeteorsContext, TodoMeteorsController } from "./controller";
 
 export * from "./controller";
@@ -32,5 +33,9 @@ export const createTodoMeteorsExtension: ExtensionFactory = api => {
 	});
 	api.on("todo_reminder", (event, ctx) => {
 		controller.onTodoReminder(event, toTodoMeteorsContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toTodoMeteorsContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

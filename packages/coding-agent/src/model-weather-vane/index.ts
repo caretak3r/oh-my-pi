@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type ModelWeatherVaneContext, ModelWeatherVaneController } from "./controller";
 
 export * from "./controller";
@@ -35,4 +36,8 @@ function toModelWeatherVaneContext(ctx: ExtensionContext): ModelWeatherVaneConte
 export const createModelWeatherVaneExtension: ExtensionFactory = api => {
 	const controller = new ModelWeatherVaneController();
 	api.on("message_start", (event, ctx) => controller.onMessageStart(event, toModelWeatherVaneContext(ctx)));
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toModelWeatherVaneContext,
+		dispose: ctx => controller.dispose(ctx),
+	});
 };

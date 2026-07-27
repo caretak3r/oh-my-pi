@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type PromptChargeContext, PromptChargeController } from "./controller";
 
 export * from "./charge";
@@ -35,5 +36,9 @@ export const createPromptChargeExtension: ExtensionFactory = api => {
 	const controller = new PromptChargeController();
 	api.on("session_start", (_event, ctx) => controller.mount(toPromptChargeContext(ctx)));
 	api.on("input", (event, ctx) => controller.onInput(event, toPromptChargeContext(ctx)));
-	api.on("session_shutdown", (_event, ctx) => controller.dispose(toPromptChargeContext(ctx)));
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toPromptChargeContext,
+		dispose: ctx => controller.dispose(ctx),
+		remountOnSwitch: ctx => controller.mount(ctx),
+	});
 };

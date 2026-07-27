@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type TokenTideContext, TokenTideController } from "./controller";
 
 export * from "./controller";
@@ -35,5 +36,9 @@ export const createTokenTideExtension: ExtensionFactory = api => {
 	});
 	api.on("message_end", (event, ctx) => {
 		controller.onMessageEnd(event, toTokenTideContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toTokenTideContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

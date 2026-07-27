@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type CadenceEqualizerContext, CadenceEqualizerController } from "./controller";
 
 export * from "./bars";
@@ -37,5 +38,9 @@ export const createCadenceEqualizerExtension: ExtensionFactory = api => {
 	});
 	api.on("message_end", (event, ctx) => {
 		controller.onMessageEnd(event, toCadenceEqualizerContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toCadenceEqualizerContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

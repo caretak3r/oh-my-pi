@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type ContextConstellationContext, ContextConstellationController } from "./controller";
 
 export * from "./controller";
@@ -34,5 +35,9 @@ export const createContextConstellationExtension: ExtensionFactory = api => {
 	});
 	api.on("auto_compaction_end", (_event, ctx) => {
 		controller.onAutoCompactionEnd(toConstellationContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toConstellationContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type ToolConstellationContext, ToolConstellationController } from "./controller";
 
 export * from "./categories";
@@ -29,5 +30,9 @@ export const createToolConstellationExtension: ExtensionFactory = api => {
 	const controller = new ToolConstellationController();
 	api.on("tool_call", (event, ctx) => {
 		controller.onToolCall(event, toConstellationContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toConstellationContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

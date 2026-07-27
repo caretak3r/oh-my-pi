@@ -1,4 +1,5 @@
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type SessionBonsaiContext, SessionBonsaiController } from "./controller";
 
 export * from "./controller";
@@ -32,5 +33,9 @@ export const createSessionBonsaiExtension: ExtensionFactory = api => {
 	});
 	api.on("session_tree", (event, ctx) => {
 		controller.onSessionTree(event, toBonsaiContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toBonsaiContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

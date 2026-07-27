@@ -87,6 +87,7 @@ export function createContextWeatherExtension(
 		pi.setLabel("Context Weather");
 
 		let mounted: MountedWidget | undefined;
+		let mountGeneration = 0;
 		let compacting = false;
 		let notified = false;
 
@@ -104,8 +105,9 @@ export function createContextWeatherExtension(
 
 		const mount = async (ctx: ExtensionContext, preloaded?: ContextWeatherSettings): Promise<void> => {
 			if (!ctx.hasUI || mounted) return;
+			const generation = mountGeneration;
 			const settings = preloaded ?? (await loadSettings(ctx));
-			if (mounted) return;
+			if (mounted || generation !== mountGeneration) return;
 			const usage = ctx.getContextUsage();
 			const forecast = forecastFromUsage(usage);
 
@@ -146,6 +148,7 @@ export function createContextWeatherExtension(
 		};
 
 		const unmount = (ctx: ExtensionContext): void => {
+			mountGeneration++;
 			if (mounted) {
 				mounted.widget.dispose();
 				if (mounted.ownedHost) mounted.host.dispose();
