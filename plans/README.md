@@ -26,7 +26,7 @@ kit-owned contract so future changes stop being 16-file edits (Epic B).
 | 004 | One shared clock + policy per session | B · rebuild | P2 | L | 001 | TODO |
 | 005 | Structural teardown on session switch & shutdown | B · rebuild | P2 | L | 004 | TODO |
 | 006 | Unify the three meanings of "animations" behind one live setting | B · rebuild | P2 | M | 004 (hard), 005 (soft) | TODO |
-| 007 | Bound per-frame work to visible output, not session history | B · rebuild | P3 | M | — (soft: 004) | TODO |
+| 007 | Bound per-frame work to visible output, not session history | B · rebuild | P3 | M | — (soft: 004) | DONE (`659d2da02`) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason) | REJECTED (rationale)
 
