@@ -1213,6 +1213,14 @@ export class EventController {
 		this.#setTerminalProgress(true);
 		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
+		// Re-entrant start (duplicate/overlapping compaction events): the container
+		// clear() above only detaches — dispose/stop the previous status child so it
+		// cannot stay subscribed to the shared frame clock (widget) or keep its
+		// interval ticking (loader).
+		this.#compactionVacuum?.dispose();
+		this.#compactionVacuum = undefined;
+		this.ctx.autoCompactionLoader?.stop();
+		this.ctx.autoCompactionLoader = undefined;
 		const reasonText =
 			event.reason === "overflow"
 				? "Context overflow detected, "
@@ -1234,21 +1242,33 @@ export class EventController {
 		this.#compactionBeforeTokens = this.ctx.viewSession.getContextUsage()?.tokens ?? 0;
 		// Motion on → the condense animation replaces the plain loader; motion off
 		// (setting off / non-TTY / CI / NO_COLOR / backpressure) falls back to it.
-		const { host, policy } = this.#ensureAnimation();
-		if (policy.tier !== "off") {
-			this.#compactionVacuum = new CompactionVacuumWidget({
-				tui: this.ctx.ui,
-				host,
-				policy,
-				action: event.action,
-				beforeTokens: this.#compactionBeforeTokens,
-				reasonText,
-				escHint: this.#maintenanceEscHint(),
+		// Construction is guarded: this is core event dispatch, not the extension
+		// runner — a cosmetic failure must degrade to the loader, never escape.
+		let vacuumMounted = false;
+		try {
+			const { host, policy } = this.#ensureAnimation();
+			if (policy.tier !== "off") {
+				this.#compactionVacuum = new CompactionVacuumWidget({
+					tui: this.ctx.ui,
+					host,
+					policy,
+					action: event.action,
+					beforeTokens: this.#compactionBeforeTokens,
+					reasonText,
+					escHint: this.#maintenanceEscHint(),
+				});
+				this.ctx.statusContainer.addChild(this.#compactionVacuum);
+				this.ctx.ui.requestRender();
+				vacuumMounted = true;
+			}
+		} catch (err) {
+			logger.error("Compaction condense animation failed; using plain loader", {
+				error: err instanceof Error ? err.message : String(err),
 			});
-			this.ctx.statusContainer.addChild(this.#compactionVacuum);
-			this.ctx.ui.requestRender();
-			return;
+			this.#compactionVacuum?.dispose();
+			this.#compactionVacuum = undefined;
 		}
+		if (vacuumMounted) return;
 		this.ctx.autoCompactionLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
