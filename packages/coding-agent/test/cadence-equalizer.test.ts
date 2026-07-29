@@ -68,16 +68,18 @@ function manualWallClock(start = 0): WallClock & { advance(ms: number): void } {
 const noopTui = { requestComponentRender: () => {} };
 const fullEnv = { hasUI: true, isTTY: true, env: {} as Record<string, string | undefined> };
 
-function recordingContext(overrides: Partial<CadenceEqualizerContext> = {}): {
+function recordingContext(
+	overrides: Partial<CadenceEqualizerContext> = {},
+	scheduler: FrameScheduler = manualScheduler(),
+): {
 	ctx: CadenceEqualizerContext;
 	calls: Array<{ key: string; content: unknown }>;
 } {
 	const calls: Array<{ key: string; content: unknown }> = [];
+	const policy = new MotionPolicy(fullEnv, "full");
 	const ctx: CadenceEqualizerContext = {
 		hasUI: true,
-		isTTY: true,
-		env: {},
-		motionSetting: "full",
+		animation: { host: new AnimationHost({ policy, scheduler }), policy },
 		theme: idTheme,
 		setWidget: (key, content) => calls.push({ key, content }),
 		...overrides,
@@ -361,7 +363,7 @@ describe("cadence equalizer controller", () => {
 		const scheduler = manualScheduler();
 		const wallClock = manualWallClock();
 		const controller = new CadenceEqualizerController({ scheduler, wallClock });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		expect(calls).toHaveLength(1);
@@ -419,7 +421,7 @@ describe("cadence equalizer controller", () => {
 		const scheduler = manualScheduler();
 		const wallClock = manualWallClock(0);
 		const controller = new CadenceEqualizerController({ scheduler, wallClock });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		expect(calls[0].content).toEqual(["eq --"]);
@@ -433,10 +435,10 @@ describe("cadence equalizer controller", () => {
 		expect(calls[2].content).toEqual(["eq --"]); // settles back to idle between turns
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const scheduler = manualScheduler();
 		const controller = new CadenceEqualizerController({ scheduler });
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -445,24 +447,27 @@ describe("cadence equalizer controller", () => {
 	it("stays dormant when there is no UI surface", () => {
 		const scheduler = manualScheduler();
 		const controller = new CadenceEqualizerController({ scheduler });
-		const { ctx, calls } = recordingContext({ hasUI: false });
+		const { ctx, calls } = recordingContext({ hasUI: false }, scheduler);
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		expect(calls).toHaveLength(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new CadenceEqualizerController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		const factory = calls[0].content as (tui: typeof noopTui, theme: CadenceEqualizerTheme) => CadenceEqualizerWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 });
@@ -619,7 +624,7 @@ describe("cadence equalizer hardening: widget/controller lifecycle", () => {
 	it("a message_start arriving after dispose remounts a fresh widget", () => {
 		const scheduler = manualScheduler();
 		const controller = new CadenceEqualizerController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		controller.dispose(ctx);

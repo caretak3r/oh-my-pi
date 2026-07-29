@@ -18,7 +18,7 @@ describe("resolveContextWeatherSettings", () => {
 			contextWeatherStyle: "spiral",
 			contextWeatherPlacement: "above", // note: NOT the WidgetPlacement spelling
 		});
-		expect(resolved.animations).toBe("off");
+		expect(resolved.animations).toBe("full");
 		expect(resolved.style).toBe("tide");
 		expect(resolved.placement).toBe("aboveEditor");
 	});
@@ -56,6 +56,11 @@ describe("readContextWeatherSettingsFromEnv", () => {
 });
 
 describe("resolveContextWeatherSettingsFromSources", () => {
+	it("inherits the supplied core motion tier when neither source sets animations", () => {
+		const resolved = resolveContextWeatherSettingsFromSources({}, {}, "subtle");
+		expect(resolved.animations).toBe("subtle");
+	});
+
 	it("lets stored plugin settings override env fallbacks", () => {
 		const resolved = resolveContextWeatherSettingsFromSources(
 			{ animations: "subtle" },

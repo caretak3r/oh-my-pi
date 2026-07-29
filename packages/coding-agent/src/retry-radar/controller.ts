@@ -1,8 +1,7 @@
-import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, backpressureFromTui, MotionPolicy } from "@oh-my-pi/pi-animation";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { AnimationHost } from "@oh-my-pi/pi-animation";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { AutoRetryEndEvent, AutoRetryStartEvent } from "../extensibility/shared-events";
+import type { SessionAnimationHandle } from "../modes/session-animation";
 import { shortReason } from "./ring";
 import { type RetryRadarState, type RetryRadarTheme, RetryRadarWidget, renderRetryLine } from "./widget";
 
@@ -37,12 +36,8 @@ const defaultTimer: RetryTimer = (ms, fn) => {
 export interface RetryRadarContext {
 	/** False in print/RPC modes with no widget surface — the radar stays dormant. */
 	hasUI: boolean;
-	/** Whether stdout is a TTY (a hard gate on motion). */
-	isTTY: boolean;
-	/** Environment for `NO_COLOR`/`CI`/`TERM` gates; defaults to `Bun.env` when omitted. */
-	env?: Record<string, string | undefined>;
-	/** The resolved `animations` setting. */
-	motionSetting: MotionSetting;
+	/** Session-shared clock+policy; when absent the widget renders static. */
+	animation?: SessionAnimationHandle;
 	theme: RetryRadarTheme;
 	setWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 }
@@ -51,6 +46,7 @@ interface AnimatedActive {
 	mode: "animated";
 	state: RetryRadarState;
 	host: AnimationHost;
+	owned: false;
 }
 interface StaticActive {
 	mode: "static";
@@ -59,41 +55,20 @@ interface StaticActive {
 type ActiveEpisode = AnimatedActive | StaticActive;
 
 /**
- * The {@link AnimationHost} backpressure field must be wired at construction,
- * before the widget factory supplies the real `tui` — this adapter lets the
- * host read a live signal once {@link attach} runs from inside that factory.
- */
-function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
-	let live: BackpressureSignal | undefined;
-	return {
-		signal: {
-			get underPressure() {
-				return live?.underPressure ?? false;
-			},
-		},
-		attach(tui) {
-			live = backpressureFromTui(tui);
-		},
-	};
-}
-
-/**
  * Drives the auto-retry countdown ring: mounts an animated ring on
- * `auto_retry_start`, settles it green/red on `auto_retry_end`, then clears it —
- * disposing the shared {@link AnimationHost} so no frame-clock subscription
- * leaks. Motion gating goes through the kit's {@link MotionPolicy}; a resolved
+ * `auto_retry_start`, settles it green/red on `auto_retry_end`, then clears it.
+ * The UI drops that widget subscription without disposing the shared
+ * {@link AnimationHost}. Motion gating goes through the kit's policy; a resolved
  * tier of `off` (setting off, non-TTY, `NO_COLOR`/`CI`/dumb terminal) renders a
  * single static status line instead of an animated widget.
  */
 export class RetryRadarController {
-	#scheduler: FrameScheduler | undefined;
 	#settleMs: number;
 	#timer: RetryTimer;
 	#active: ActiveEpisode | undefined;
 	#cancelSettle: (() => void) | undefined;
 
-	constructor(options: { scheduler?: FrameScheduler; settleMs?: number; timer?: RetryTimer } = {}) {
-		this.#scheduler = options.scheduler;
+	constructor(options: { settleMs?: number; timer?: RetryTimer } = {}) {
 		this.#settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
 		this.#timer = options.timer ?? defaultTimer;
 	}
@@ -111,22 +86,18 @@ export class RetryRadarController {
 			phase: "waiting",
 		};
 
-		const policy = new MotionPolicy({ hasUI: ctx.hasUI, isTTY: ctx.isTTY, env: ctx.env }, ctx.motionSetting);
-		if (policy.tier === "off") {
+		const shared = ctx.animation;
+		if (!shared || shared.policy.tier === "off") {
 			this.#active = { mode: "static", state };
 			ctx.setWidget(WIDGET_KEY, [renderRetryLine(state, 0, STATIC_WIDTH, ctx.theme)], WIDGET_OPTIONS);
 			return;
 		}
 
-		const backpressure = deferredBackpressure();
-		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
-		this.#active = { mode: "animated", state, host };
+		const { host, policy } = shared;
+		this.#active = { mode: "animated", state, host, owned: false };
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => {
-				backpressure.attach(tui);
-				return new RetryRadarWidget({ tui, host, policy, state, theme });
-			},
+			(tui, theme) => new RetryRadarWidget({ tui, host, policy, state, theme }),
 			WIDGET_OPTIONS,
 		);
 	}
@@ -155,7 +126,7 @@ export class RetryRadarController {
 		});
 	}
 
-	/** Tear down any live episode: dispose the host and clear the widget. Idempotent. */
+	/** Clear any live episode without disposing the session-owned host. Idempotent. */
 	dispose(ctx: RetryRadarContext): void {
 		this.#cancelPendingSettle();
 		this.#teardownActive(ctx);
@@ -165,7 +136,7 @@ export class RetryRadarController {
 		const active = this.#active;
 		if (!active) return;
 		this.#active = undefined;
-		if (active.mode === "animated") active.host.dispose();
+		if (active.mode === "animated" && active.owned) active.host.dispose();
 		ctx.setWidget(WIDGET_KEY, undefined, WIDGET_OPTIONS);
 	}
 

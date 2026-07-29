@@ -3,7 +3,7 @@ import { AnimatedWidget } from "@oh-my-pi/pi-animation";
 import type { Theme } from "../modes/theme/theme";
 import { budGlyph, isShimmering, unfurlGrowth } from "./growth";
 import type { BonsaiSnapshot, BonsaiState } from "./state";
-import { activeLeafRank, type BonsaiNode, collectLeafIds, pruneForDisplay } from "./tree";
+import { activeLeafRank, type BonsaiNode, collectLeafIds } from "./tree";
 
 /** The slice of {@link Theme} the renderer needs — just foreground coloring. */
 export type BonsaiTheme = Pick<Theme, "fg">;
@@ -55,8 +55,7 @@ export function renderBonsaiTree(
 	theme: BonsaiTheme,
 	tier: "full" | "subtle",
 ): readonly string[] {
-	const { nodes, hiddenLeaves } = pruneForDisplay(snapshot.tree, snapshot.activeLeafId, snapshot.spawnAt);
-	const rows = flatten(nodes);
+	const rows = flatten(snapshot.displayTree);
 	if (rows.length === 0) return [theme.fg("dim", "(no branches yet)")];
 
 	const lines = rows.map(row => {
@@ -65,8 +64,8 @@ export function renderBonsaiTree(
 		const glyph = nodeGlyph(row.node, growth, elapsedMs, tier);
 		return theme.fg(row.node.isActive ? "accent" : "dim", `${row.prefix}${glyph}`);
 	});
-	if (hiddenLeaves > 0) {
-		lines.push(theme.fg("dim", `⋯ +${hiddenLeaves} more`));
+	if (snapshot.hiddenLeaves > 0) {
+		lines.push(theme.fg("dim", `⋯ +${snapshot.hiddenLeaves} more`));
 	}
 	return lines;
 }

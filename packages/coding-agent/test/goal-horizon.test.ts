@@ -75,16 +75,18 @@ function goalUpdated(goal: Goal | null): GoalUpdatedEvent {
 	return { type: "goal_updated", goal };
 }
 
-function recordingContext(overrides: Partial<GoalHorizonContext> = {}): {
+function recordingContext(
+	overrides: Partial<GoalHorizonContext> = {},
+	scheduler: FrameScheduler = manualScheduler(),
+): {
 	ctx: GoalHorizonContext;
 	calls: Array<{ key: string; content: unknown }>;
 } {
 	const calls: Array<{ key: string; content: unknown }> = [];
+	const policy = new MotionPolicy(fullEnv, "full");
 	const ctx: GoalHorizonContext = {
 		hasUI: true,
-		isTTY: true,
-		env: {},
-		motionSetting: "full",
+		animation: { host: new AnimationHost({ policy, scheduler }), policy },
 		theme: idTheme,
 		setWidget: (key, content) => calls.push({ key, content }),
 		...overrides,
@@ -355,7 +357,7 @@ describe("goal horizon controller", () => {
 	it("mounts an animated widget on the first goal_updated event and mutates state in place afterward", () => {
 		const scheduler = manualScheduler();
 		const controller = new GoalHorizonController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onGoalUpdated(goalUpdated(makeGoal({ tokensUsed: 100 })), ctx);
 		expect(calls).toHaveLength(1);
@@ -373,7 +375,7 @@ describe("goal horizon controller", () => {
 	it("renders and updates a static line for the off tier with zero frame-clock subscriptions", () => {
 		const scheduler = manualScheduler();
 		const controller = new GoalHorizonController({ scheduler });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 
 		controller.onGoalUpdated(
 			goalUpdated(makeGoal({ objective: "ship it", tokensUsed: 250, tokenBudget: 1000 })),
@@ -389,9 +391,9 @@ describe("goal horizon controller", () => {
 		expect((calls[calls.length - 1].content as string[])[0]).toBe("🌅 ship it 50% (500/1000 tok)");
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const controller = new GoalHorizonController();
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onGoalUpdated(goalUpdated(makeGoal()), ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -416,18 +418,21 @@ describe("goal horizon controller", () => {
 		expect(controller.state.snapshot().hasGoal).toBe(false);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new GoalHorizonController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onGoalUpdated(goalUpdated(makeGoal()), ctx);
 		const factory = calls[0].content as (tui: typeof noopTui, theme: GoalHorizonTheme) => GoalHorizonWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 });

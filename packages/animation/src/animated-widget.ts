@@ -1,4 +1,5 @@
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { AnimationHost } from "./animation-host";
 import type { MotionPolicy } from "./motion-policy";
 
@@ -123,7 +124,9 @@ export abstract class AnimatedWidget implements Component {
 	}
 
 	#subscribeToHost(): void {
-		this.#unsubscribe = this.#host.subscribe((_frame, elapsedMs) => this.#handleFrame(elapsedMs));
+		this.#unsubscribe = this.#host.subscribe((_frame, elapsedMs) => this.#handleFrame(elapsedMs), {
+			cadenceMs: () => this.#policy.cadenceMs,
+		});
 	}
 
 	/**
@@ -150,16 +153,27 @@ export abstract class AnimatedWidget implements Component {
 	#handleFrame(elapsedMs: number): void {
 		if (this.#disposed) return;
 		this.#elapsedMs = elapsedMs;
-		this.onFrame(elapsedMs);
-		const width = this.#lastWidth;
-		if (width === undefined) {
-			// Not laid out yet: request an initial paint; render() will produce rows.
+		try {
+			this.onFrame(elapsedMs);
+			const width = this.#lastWidth;
+			if (width === undefined) {
+				// Not laid out yet: request an initial paint; render() will produce rows.
+				this.#tui.requestComponentRender(this);
+				return;
+			}
+			const next = this.renderFrame(width);
+			if (rowsEqual(next, this.#lastRows)) return;
+			this.#lastRows = next;
 			this.#tui.requestComponentRender(this);
-			return;
+		} catch (err) {
+			// Fail-open: a broken renderer freezes on its last painted frame instead
+			// of crashing the session. dispose() also detaches the policy
+			// subscription, so an off->on tier flip cannot resubscribe it.
+			logger.error("AnimatedWidget frame threw; widget disposed", {
+				widget: this.constructor.name,
+				error: err instanceof Error ? err.message : String(err),
+			});
+			this.dispose();
 		}
-		const next = this.renderFrame(width);
-		if (rowsEqual(next, this.#lastRows)) return;
-		this.#lastRows = next;
-		this.#tui.requestComponentRender(this);
 	}
 }

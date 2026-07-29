@@ -1,6 +1,5 @@
-import type { MotionSetting } from "@oh-my-pi/pi-animation";
-import { isSettingsInitialized, settings } from "../config/settings";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type MemoryCrystalsContext, MemoryCrystalsController } from "./controller";
 
 export * from "./controller";
@@ -8,18 +7,10 @@ export * from "./crystal";
 export * from "./state";
 export * from "./widget";
 
-function readMotionSetting(): MotionSetting {
-	if (!isSettingsInitialized()) return "full";
-	const value = settings.get("display.animations");
-	return value === "off" || value === "subtle" || value === "full" ? value : "full";
-}
-
 function toMemoryCrystalsContext(ctx: ExtensionContext): MemoryCrystalsContext {
 	return {
 		hasUI: ctx.hasUI,
-		isTTY: process.stdout.isTTY === true,
-		env: Bun.env,
-		motionSetting: readMotionSetting(),
+		animation: ctx.ui.animation?.(),
 		theme: ctx.ui.theme,
 		setWidget: (key, content, options) => ctx.ui.setWidget(key, content, options),
 	};
@@ -40,4 +31,8 @@ function toMemoryCrystalsContext(ctx: ExtensionContext): MemoryCrystalsContext {
 export const createMemoryCrystalsExtension: ExtensionFactory = api => {
 	const controller = new MemoryCrystalsController();
 	api.on("auto_compaction_end", (event, ctx) => controller.onAutoCompactionEnd(event, toMemoryCrystalsContext(ctx)));
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toMemoryCrystalsContext,
+		dispose: ctx => controller.dispose(ctx),
+	});
 };

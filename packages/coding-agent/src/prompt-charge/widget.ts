@@ -91,15 +91,15 @@ export interface PromptChargeWidgetOptions extends AnimatedWidgetOptions {
 	theme: PromptChargeTheme;
 	/** Same clock the controller stamps release starts with — NOT the host's internal relative elapsed-ms. */
 	clock: PromptChargeClock;
-	/** Pulls the core input editor's current text. Called once per frame tick — the stand-in for the per-keystroke `ExtensionEvent` this codebase does not have. */
-	getEditorText: () => string;
+	/** Pulls the core input editor's character count without materializing its text. Called once per frame tick — the stand-in for the per-keystroke `ExtensionEvent` this codebase does not have. */
+	getEditorTextLength: () => number;
 }
 
 /**
  * Ambient widget for Prompt Charge. Unlike every other Wave 2 widget, its
  * state mutation does not come from an event handler mutating shared state
  * out of band — there is no per-keystroke event to drive it. Instead
- * `onFrame` itself polls `getEditorText()` every tick and feeds the live
+ * `onFrame` itself polls `getEditorTextLength()` every tick and feeds the live
  * character count into the state, riding the same shared `AnimationHost`
  * clock every other ambient Wave 2 widget already subscribes to. Reads
  * {@link PromptChargeClock} rather than `this.elapsedMs` for the same
@@ -113,7 +113,7 @@ export class PromptChargeWidget extends AnimatedWidget {
 	#theme: PromptChargeTheme;
 	#policy: MotionPolicy;
 	#clock: PromptChargeClock;
-	#getEditorText: () => string;
+	#getEditorTextLength: () => number;
 
 	constructor(options: PromptChargeWidgetOptions) {
 		super(options);
@@ -121,11 +121,11 @@ export class PromptChargeWidget extends AnimatedWidget {
 		this.#theme = options.theme;
 		this.#policy = options.policy;
 		this.#clock = options.clock;
-		this.#getEditorText = options.getEditorText;
+		this.#getEditorTextLength = options.getEditorTextLength;
 	}
 
 	onFrame(_elapsedMs: number): void {
-		this.#state.sampleEditorLength(this.#getEditorText().length);
+		this.#state.sampleEditorLength(this.#getEditorTextLength());
 	}
 
 	renderFrame(_width: number): readonly string[] {

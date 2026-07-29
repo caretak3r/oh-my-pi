@@ -370,16 +370,18 @@ describe("token tide widget lifecycle", () => {
 });
 
 describe("token tide controller", () => {
-	function recordingContext(overrides: Partial<TokenTideContext> = {}): {
+	function recordingContext(
+		scheduler: FrameScheduler,
+		overrides: Partial<TokenTideContext> = {},
+	): {
 		ctx: TokenTideContext;
 		calls: Array<{ key: string; content: unknown }>;
 	} {
 		const calls: Array<{ key: string; content: unknown }> = [];
+		const policy = new MotionPolicy(fullEnv, "full");
 		const ctx: TokenTideContext = {
 			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
+			animation: { host: new AnimationHost({ policy, scheduler }), policy },
 			theme: idTheme,
 			setWidget: (key, content) => calls.push({ key, content }),
 			...overrides,
@@ -391,7 +393,7 @@ describe("token tide controller", () => {
 		const scheduler = manualScheduler();
 		const wallClock = manualWallClock();
 		const controller = new TokenTideController({ scheduler, wallClock });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext(scheduler);
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		expect(calls).toHaveLength(1);
@@ -406,7 +408,7 @@ describe("token tide controller", () => {
 	it("ignores user and tool-result messages entirely", () => {
 		const scheduler = manualScheduler();
 		const controller = new TokenTideController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext(scheduler);
 
 		controller.onMessageStart(messageStartEvent(userMessage()), ctx);
 		expect(calls).toHaveLength(0);
@@ -445,7 +447,7 @@ describe("token tide controller", () => {
 		const scheduler = manualScheduler();
 		const wallClock = manualWallClock(0);
 		const controller = new TokenTideController({ scheduler, wallClock });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext(scheduler, { animation: undefined });
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		expect(calls[0].content).toEqual(["-- tok/s"]);
@@ -459,10 +461,10 @@ describe("token tide controller", () => {
 		expect(calls[2].content).toEqual(["-- tok/s"]); // settles back to idle between turns
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const scheduler = manualScheduler();
 		const controller = new TokenTideController({ scheduler });
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext(scheduler, { animation: undefined });
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -471,31 +473,34 @@ describe("token tide controller", () => {
 	it("stays dormant when there is no UI surface", () => {
 		const scheduler = manualScheduler();
 		const controller = new TokenTideController({ scheduler });
-		const { ctx, calls } = recordingContext({ hasUI: false });
+		const { ctx, calls } = recordingContext(scheduler, { hasUI: false });
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		expect(calls).toHaveLength(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new TokenTideController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext(scheduler);
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		const factory = calls[0].content as (tui: typeof noopTui, theme: TokenTideTheme) => TokenTideWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 
 	it("dispose is idempotent: a second call does not re-clear the widget or double-dispose the host", () => {
 		const scheduler = manualScheduler();
 		const controller = new TokenTideController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext(scheduler);
 
 		controller.onMessageStart(messageStartEvent(assistantMessage(0, 0)), ctx);
 		controller.dispose(ctx);
@@ -508,7 +513,7 @@ describe("token tide controller", () => {
 	it("dispose before any message ever mounted a widget is a safe no-op", () => {
 		const scheduler = manualScheduler();
 		const controller = new TokenTideController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext(scheduler);
 
 		expect(() => controller.dispose(ctx)).not.toThrow();
 		expect(calls).toHaveLength(0);
@@ -517,7 +522,7 @@ describe("token tide controller", () => {
 	it("onMessageUpdate/onMessageEnd before any onMessageStart do not crash and touch no widget", () => {
 		const scheduler = manualScheduler();
 		const controller = new TokenTideController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext(scheduler);
 
 		expect(() => controller.onMessageUpdate(messageUpdateEvent(assistantMessage(0, 50)), ctx)).not.toThrow();
 		expect(() => controller.onMessageEnd(messageEndEvent(assistantMessage(0, 50, 500)), ctx)).not.toThrow();

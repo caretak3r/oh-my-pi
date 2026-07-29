@@ -28,7 +28,7 @@
       },
       "animations": {
         "type": "boolean",
-        "description": "Enable the animated gradient sweep. When off, the pack renders a static gradient. Backed at runtime by the core `display.shimmer` toggle.",
+        "description": "Enable the animated gradient sweep. When off, the pack renders a static gradient. Backed at runtime by the core `display.shimmer` toggle and independent of `display.animations`; `display.animations: off` does not still the sweep today.",
         "mapsTo": "display.shimmer",
         "mapsToTrue": "classic",
         "mapsToFalse": "disabled",

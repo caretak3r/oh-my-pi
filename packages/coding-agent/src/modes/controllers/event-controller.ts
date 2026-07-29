@@ -1,7 +1,6 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { AnimationHost, backpressureFromTui, MotionPolicy } from "@oh-my-pi/pi-animation";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
@@ -36,6 +35,7 @@ import { nextActionableTask } from "../../tools/todo";
 import { SpeechEnhancer } from "../../tts/speech-enhancer";
 import { vocalizer } from "../../tts/vocalizer";
 import { canonicalizeMessage } from "../../utils/thinking-display";
+import { disposeSessionAnimation, type SessionAnimationHandle, sessionAnimation } from "../session-animation";
 import { interruptHint } from "../shared";
 import { createAssistantMessageComponent } from "../utils/interactive-context-helpers";
 import { assistantUsageIsBilled } from "../utils/transcript-render-helpers";
@@ -57,6 +57,8 @@ const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 const MAX_LIVE_IRC_CARDS = 4;
 const IDLE_RECAP_MIN_SECONDS = 1;
 const IDLE_RECAP_MAX_SECONDS = 3600;
+/** Display cap for a one-line working status message, not a protocol limit. */
+const MAX_WORKING_MESSAGE_INTENT_LENGTH = 200;
 
 const RAW_PARTIAL_JSON_RENDERERS: Record<string, true> = { bash: true, edit: true, apply_patch: true };
 
@@ -119,10 +121,6 @@ export class EventController {
 	#prevHideThinking = false;
 	#handlers: AgentSessionEventHandlers;
 	#terminalProgressActive = false;
-	// Shared animation-kit host/policy for ambient animated widgets, created lazily
-	// on first use and reused across compactions. Disposed with the controller.
-	#animationHost: AnimationHost | undefined;
-	#motionPolicy: MotionPolicy | undefined;
 	// Live compaction condense animation (replaces the plain loader when motion is
 	// on); the before-token snapshot feeds the settle line rendered on end.
 	#compactionVacuum: CompactionVacuumWidget | undefined;
@@ -213,9 +211,7 @@ export class EventController {
 		this.#setTerminalProgress(false);
 		this.#compactionVacuum?.dispose();
 		this.#compactionVacuum = undefined;
-		this.#animationHost?.dispose();
-		this.#animationHost = undefined;
-		this.#motionPolicy = undefined;
+		disposeSessionAnimation(this.ctx.ui);
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
 		}
@@ -229,19 +225,8 @@ export class EventController {
 	 * settings change is honored. The policy resolves `off` on its own for
 	 * non-TTY / CI / NO_COLOR / backpressure, which is the static-fallback gate.
 	 */
-	#ensureAnimation(): { host: AnimationHost; policy: MotionPolicy } {
-		if (!this.#animationHost || !this.#motionPolicy) {
-			const backpressure = backpressureFromTui(this.ctx.ui);
-			this.#motionPolicy = new MotionPolicy(
-				{ hasUI: true, isTTY: process.stdout.isTTY === true, backpressure },
-				this.ctx.settings.get("display.animations"),
-			);
-			this.#animationHost = new AnimationHost({ policy: this.#motionPolicy, backpressure });
-		} else {
-			this.#motionPolicy.setSetting(this.ctx.settings.get("display.animations"));
-			this.#motionPolicy.refresh();
-		}
-		return { host: this.#animationHost, policy: this.#motionPolicy };
+	#ensureAnimation(): SessionAnimationHandle {
+		return sessionAnimation(this.ctx.ui);
 	}
 
 	#resetReadGroup(): void {
@@ -300,9 +285,14 @@ export class EventController {
 		// schema validation; `?.` only guards null/undefined, so guard the type too.
 		if (typeof intent !== "string") return;
 		const trimmed = intent.trim();
-		if (!trimmed || trimmed === this.#lastIntent) return;
-		this.#lastIntent = trimmed;
-		this.ctx.setWorkingMessage(`${trimmed}${interruptHint()}`);
+		if (!trimmed) return;
+		const capped =
+			trimmed.length > MAX_WORKING_MESSAGE_INTENT_LENGTH
+				? `${trimmed.slice(0, MAX_WORKING_MESSAGE_INTENT_LENGTH - 1)}…`
+				: trimmed;
+		if (capped === this.#lastIntent) return;
+		this.#lastIntent = capped;
+		this.ctx.setWorkingMessage(`${capped}${interruptHint()}`);
 	}
 
 	subscribeToAgent(): void {
@@ -1213,6 +1203,14 @@ export class EventController {
 		this.#setTerminalProgress(true);
 		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
+		// Re-entrant start (duplicate/overlapping compaction events): the container
+		// clear() above only detaches — dispose/stop the previous status child so it
+		// cannot stay subscribed to the shared frame clock (widget) or keep its
+		// interval ticking (loader).
+		this.#compactionVacuum?.dispose();
+		this.#compactionVacuum = undefined;
+		this.ctx.autoCompactionLoader?.stop();
+		this.ctx.autoCompactionLoader = undefined;
 		const reasonText =
 			event.reason === "overflow"
 				? "Context overflow detected, "
@@ -1234,21 +1232,33 @@ export class EventController {
 		this.#compactionBeforeTokens = this.ctx.viewSession.getContextUsage()?.tokens ?? 0;
 		// Motion on → the condense animation replaces the plain loader; motion off
 		// (setting off / non-TTY / CI / NO_COLOR / backpressure) falls back to it.
-		const { host, policy } = this.#ensureAnimation();
-		if (policy.tier !== "off") {
-			this.#compactionVacuum = new CompactionVacuumWidget({
-				tui: this.ctx.ui,
-				host,
-				policy,
-				action: event.action,
-				beforeTokens: this.#compactionBeforeTokens,
-				reasonText,
-				escHint: this.#maintenanceEscHint(),
+		// Construction is guarded: this is core event dispatch, not the extension
+		// runner — a cosmetic failure must degrade to the loader, never escape.
+		let vacuumMounted = false;
+		try {
+			const { host, policy } = this.#ensureAnimation();
+			if (policy.tier !== "off") {
+				this.#compactionVacuum = new CompactionVacuumWidget({
+					tui: this.ctx.ui,
+					host,
+					policy,
+					action: event.action,
+					beforeTokens: this.#compactionBeforeTokens,
+					reasonText,
+					escHint: this.#maintenanceEscHint(),
+				});
+				this.ctx.statusContainer.addChild(this.#compactionVacuum);
+				this.ctx.ui.requestRender();
+				vacuumMounted = true;
+			}
+		} catch (err) {
+			logger.error("Compaction condense animation failed; using plain loader", {
+				error: err instanceof Error ? err.message : String(err),
 			});
-			this.ctx.statusContainer.addChild(this.#compactionVacuum);
-			this.ctx.ui.requestRender();
-			return;
+			this.#compactionVacuum?.dispose();
+			this.#compactionVacuum = undefined;
 		}
+		if (vacuumMounted) return;
 		this.ctx.autoCompactionLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),

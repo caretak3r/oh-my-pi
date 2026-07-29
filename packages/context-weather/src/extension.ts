@@ -8,8 +8,9 @@
  *
  * Settings resolve from the plugin's manifest-declared settings via the runtime
  * plugin settings store (`getPluginSettings`), with env-var fallbacks:
- * stored setting > env var > default. Both mount and the live `context` refresh
- * re-read the store, so `omp plugin` settings changes apply without a restart.
+ * stored setting > env var > core `display.animations` tier. Both mount and the
+ * live `context` refresh re-read the sources, so `omp plugin` and core motion
+ * changes apply without a restart.
  *
  * See README.md for the dev-load recipe and the manual acceptance walkthrough.
  */
@@ -21,7 +22,9 @@ import {
 	MotionPolicy,
 } from "@oh-my-pi/pi-animation";
 import type { ContextUsage, ExtensionAPI, ExtensionContext, Theme } from "@oh-my-pi/pi-coding-agent";
+import { readMotionSetting } from "@oh-my-pi/pi-coding-agent/config/motion";
 import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
+import { sessionAnimation } from "@oh-my-pi/pi-coding-agent/modes/session-animation";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import type { WeatherForecast } from "./model";
 import type { BarometerCaps } from "./renderer";
@@ -35,6 +38,7 @@ const PLUGIN_NAME = "@oh-my-pi/context-weather";
 interface MountedWidget {
 	widget: ContextWeatherWidget;
 	host: AnimationHost;
+	ownedHost: boolean;
 	policy: MotionPolicy;
 	tui: TUI;
 	style: ContextWeatherSettings["style"];
@@ -85,6 +89,7 @@ export function createContextWeatherExtension(
 		pi.setLabel("Context Weather");
 
 		let mounted: MountedWidget | undefined;
+		let mountGeneration = 0;
 		let compacting = false;
 		let notified = false;
 
@@ -93,17 +98,18 @@ export function createContextWeatherExtension(
 			try {
 				stored = await readPluginSettings(ctx.cwd);
 			} catch (err) {
-				pi.logger.warn("Context weather: failed to read plugin settings, using env/defaults", {
+				pi.logger.warn("Context weather: failed to read plugin settings, using env/core defaults", {
 					error: String(err),
 				});
 			}
-			return resolveContextWeatherSettingsFromSources(stored, options.env);
+			return resolveContextWeatherSettingsFromSources(stored, options.env, readMotionSetting());
 		};
 
 		const mount = async (ctx: ExtensionContext, preloaded?: ContextWeatherSettings): Promise<void> => {
 			if (!ctx.hasUI || mounted) return;
+			const generation = mountGeneration;
 			const settings = preloaded ?? (await loadSettings(ctx));
-			if (mounted) return;
+			if (mounted || generation !== mountGeneration) return;
 			const usage = ctx.getContextUsage();
 			const forecast = forecastFromUsage(usage);
 
@@ -112,7 +118,10 @@ export function createContextWeatherExtension(
 				(tui: TUI, theme: Theme) => {
 					const backpressure = backpressureFromTui(tui);
 					const policy = new MotionPolicy(motionEnvironment(tui), settings.animations);
-					const host = new AnimationHost({ policy, backpressure, scheduler: options.scheduler });
+					const ownedHost = options.scheduler !== undefined;
+					const host = ownedHost
+						? new AnimationHost({ policy, backpressure, scheduler: options.scheduler })
+						: sessionAnimation(tui).host;
 					const widget = new ContextWeatherWidget({
 						tui,
 						host,
@@ -127,6 +136,7 @@ export function createContextWeatherExtension(
 					mounted = {
 						widget,
 						host,
+						ownedHost,
 						policy,
 						tui,
 						style: settings.style,
@@ -140,9 +150,10 @@ export function createContextWeatherExtension(
 		};
 
 		const unmount = (ctx: ExtensionContext): void => {
+			mountGeneration++;
 			if (mounted) {
 				mounted.widget.dispose();
-				mounted.host.dispose();
+				if (mounted.ownedHost) mounted.host.dispose();
 				mounted = undefined;
 			}
 			if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);

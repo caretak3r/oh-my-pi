@@ -1,6 +1,5 @@
-import type { MotionSetting } from "@oh-my-pi/pi-animation";
-import { isSettingsInitialized, settings } from "../config/settings";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type TodoMeteorsContext, TodoMeteorsController } from "./controller";
 
 export * from "./controller";
@@ -8,18 +7,10 @@ export * from "./ember";
 export * from "./state";
 export * from "./widget";
 
-function readMotionSetting(): MotionSetting {
-	if (!isSettingsInitialized()) return "full";
-	const value = settings.get("display.animations");
-	return value === "off" || value === "subtle" || value === "full" ? value : "full";
-}
-
 function toTodoMeteorsContext(ctx: ExtensionContext): TodoMeteorsContext {
 	return {
 		hasUI: ctx.hasUI,
-		isTTY: process.stdout.isTTY === true,
-		env: Bun.env,
-		motionSetting: readMotionSetting(),
+		animation: ctx.ui.animation?.(),
 		theme: ctx.ui.theme,
 		setWidget: (key, content, options) => ctx.ui.setWidget(key, content, options),
 	};
@@ -42,5 +33,9 @@ export const createTodoMeteorsExtension: ExtensionFactory = api => {
 	});
 	api.on("todo_reminder", (event, ctx) => {
 		controller.onTodoReminder(event, toTodoMeteorsContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toTodoMeteorsContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

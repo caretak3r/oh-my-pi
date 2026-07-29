@@ -1,9 +1,11 @@
 import { UNFURL_DURATION_MS } from "./growth";
-import { type BonsaiNode, buildBonsaiTree, type RawTreeNode } from "./tree";
+import { type BonsaiNode, buildBonsaiTree, pruneForDisplay, type RawTreeNode } from "./tree";
 
 /** Immutable snapshot handed to the pure renderer each frame. */
 export interface BonsaiSnapshot {
 	readonly tree: readonly BonsaiNode[];
+	readonly displayTree: readonly BonsaiNode[];
+	readonly hiddenLeaves: number;
 	readonly activeLeafId: string | null;
 	readonly spawnAt: ReadonlyMap<string, number>;
 }
@@ -24,6 +26,8 @@ export interface BonsaiSnapshot {
 export class BonsaiState {
 	#spawnAt = new Map<string, number>();
 	#tree: readonly BonsaiNode[] = [];
+	#displayTree: readonly BonsaiNode[] = [];
+	#hiddenLeaves = 0;
 	#activeLeafId: string | null = null;
 	#seeded = false;
 
@@ -34,8 +38,10 @@ export class BonsaiState {
 		this.#seeded = true;
 
 		let changed = activeLeafId !== this.#activeLeafId;
+		const liveIds = new Set<string>();
 		const visit = (nodes: readonly BonsaiNode[]): void => {
 			for (const node of nodes) {
+				liveIds.add(node.id);
 				if (!this.#spawnAt.has(node.id)) {
 					this.#spawnAt.set(node.id, isBaseline ? elapsedMs - UNFURL_DURATION_MS : elapsedMs);
 					changed = true;
@@ -44,14 +50,26 @@ export class BonsaiState {
 			}
 		};
 		visit(nextTree);
+		for (const id of this.#spawnAt.keys()) {
+			if (!liveIds.has(id)) this.#spawnAt.delete(id);
+		}
 
 		this.#tree = nextTree;
+		const display = pruneForDisplay(nextTree, activeLeafId, this.#spawnAt);
+		this.#displayTree = display.nodes;
+		this.#hiddenLeaves = display.hiddenLeaves;
 		this.#activeLeafId = activeLeafId;
 		return changed;
 	}
 
 	/** Immutable view for the pure renderer. */
 	snapshot(): BonsaiSnapshot {
-		return { tree: this.#tree, activeLeafId: this.#activeLeafId, spawnAt: this.#spawnAt };
+		return {
+			tree: this.#tree,
+			displayTree: this.#displayTree,
+			hiddenLeaves: this.#hiddenLeaves,
+			activeLeafId: this.#activeLeafId,
+			spawnAt: this.#spawnAt,
+		};
 	}
 }

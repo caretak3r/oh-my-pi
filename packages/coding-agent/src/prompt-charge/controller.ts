@@ -1,8 +1,8 @@
-import type { BackpressureSignal, FrameScheduler, MotionSetting } from "@oh-my-pi/pi-animation";
-import { AnimationHost, backpressureFromTui, DEFAULT_FRAME_SCHEDULER, MotionPolicy } from "@oh-my-pi/pi-animation";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { FrameScheduler } from "@oh-my-pi/pi-animation";
+import { type AnimationHost, DEFAULT_FRAME_SCHEDULER } from "@oh-my-pi/pi-animation";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "../extensibility/extensions";
 import type { InputEvent } from "../extensibility/extensions/types";
+import type { SessionAnimationHandle } from "../modes/session-animation";
 import { chargeFraction } from "./charge";
 import { PromptChargeState } from "./state";
 import { type PromptChargeTheme, PromptChargeWidget, renderPromptChargeOffText } from "./widget";
@@ -15,40 +15,35 @@ const WIDGET_OPTIONS: ExtensionWidgetOptions = { placement: "aboveEditor" };
  * `ExtensionContext` at the call site so the controller stays decoupled from
  * the full context (and unit-testable with a plain object).
  */
-export interface PromptChargeContext {
+interface PromptChargeContextBase {
 	/** False in print/RPC modes with no widget surface — the field stays dormant. */
 	hasUI: boolean;
-	/** Whether stdout is a TTY (a hard gate on motion). */
-	isTTY: boolean;
-	/** Environment for `NO_COLOR`/`CI`/`TERM` gates; defaults to `Bun.env` when omitted. */
-	env?: Record<string, string | undefined>;
-	/** The resolved `animations` setting. */
-	motionSetting: MotionSetting;
+	/** Session-shared clock+policy; when absent the widget renders static. */
+	animation?: SessionAnimationHandle;
 	theme: PromptChargeTheme;
-	/** `ExtensionContext.ui.getEditorText` — the only real signal this feature is grounded on. */
-	getEditorText(): string;
 	setWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 }
 
-type Mount = { mode: "animated"; host: AnimationHost } | { mode: "off" };
+type PromptChargeEditorSignal =
+	| {
+			/** Allocation-free editor length signal used by the production adapter. */
+			getEditorTextLength: () => number;
+			/** Legacy/test adapter retained for existing external contexts; never used when the length signal exists. */
+			getEditorText?: () => string;
+	  }
+	| {
+			getEditorTextLength?: undefined;
+			/** Legacy fallback for contexts that have not adopted the allocation-free length signal. */
+			getEditorText: () => string;
+	  };
 
-/**
- * The {@link AnimationHost} backpressure field must be wired at construction,
- * before the widget factory supplies the real `tui` — this adapter lets the
- * host read a live signal once {@link attach} runs from inside that factory.
- */
-function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<TUI, "renderUnderPressure">): void } {
-	let live: BackpressureSignal | undefined;
-	return {
-		signal: {
-			get underPressure() {
-				return live?.underPressure ?? false;
-			},
-		},
-		attach(tui) {
-			live = backpressureFromTui(tui);
-		},
-	};
+export type PromptChargeContext = PromptChargeContextBase & PromptChargeEditorSignal;
+
+type Mount = { mode: "animated"; host: AnimationHost; owned: false } | { mode: "off" };
+
+function editorTextLengthAccessor(ctx: PromptChargeContext): () => number {
+	if (ctx.getEditorTextLength) return ctx.getEditorTextLength;
+	return () => ctx.getEditorText().length;
 }
 
 /**
@@ -57,7 +52,7 @@ function deferredBackpressure(): { signal: BackpressureSignal; attach(tui: Pick<
  * `extensibility/extensions/types.ts`'s `ExtensionEvent` union has nothing
  * fired per keystroke (the only `input` event fires once, at submit). So
  * this controller mounts unconditionally on `session_start` (the widget then
- * polls `ExtensionContext.ui.getEditorText()` itself, once per animation
+ * polls `ExtensionContext.ui.getEditorTextLength()` itself, once per animation
  * frame — see `widget.ts`'s `onFrame`) rather than lazily on a first
  * data-bearing event the way Cost Candle/Model Weather Vane do, since an
  * idle 0%-charge caret is itself the correct resting state to show from the
@@ -106,34 +101,30 @@ export class PromptChargeController {
 		// Animated mode: the shared AnimationHost's next tick re-renders from the mutated state.
 	}
 
-	/** Tear down the live mount: dispose the host (if animated) and clear the widget. Idempotent. */
+	/** Clear the live widget without disposing the session-owned host. Idempotent. */
 	dispose(ctx: Pick<PromptChargeContext, "setWidget">): void {
 		if (!this.#mount) return;
-		if (this.#mount.mode === "animated") this.#mount.host.dispose();
+		if (this.#mount.mode === "animated" && this.#mount.owned) this.#mount.host.dispose();
 		this.#mount = undefined;
 		ctx.setWidget(WIDGET_KEY, undefined, WIDGET_OPTIONS);
 	}
 
 	#mountWidget(ctx: PromptChargeContext): Mount {
-		const policy = new MotionPolicy({ hasUI: ctx.hasUI, isTTY: ctx.isTTY, env: ctx.env }, ctx.motionSetting);
-		if (policy.tier === "off") {
+		const shared = ctx.animation;
+		if (!shared || shared.policy.tier === "off") {
 			ctx.setWidget(WIDGET_KEY, [renderPromptChargeOffText(this.#state.snapshot())], WIDGET_OPTIONS);
 			return { mode: "off" };
 		}
 
-		const backpressure = deferredBackpressure();
-		const host = new AnimationHost({ policy, backpressure: backpressure.signal, scheduler: this.#scheduler });
+		const { host, policy } = shared;
 		const state = this.#state;
 		const clock = this.#scheduler;
-		const getEditorText = ctx.getEditorText;
+		const getEditorTextLength = editorTextLengthAccessor(ctx);
 		ctx.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => {
-				backpressure.attach(tui);
-				return new PromptChargeWidget({ tui, host, policy, state, theme, clock, getEditorText });
-			},
+			(tui, theme) => new PromptChargeWidget({ tui, host, policy, state, theme, clock, getEditorTextLength }),
 			WIDGET_OPTIONS,
 		);
-		return { mode: "animated", host };
+		return { mode: "animated", host, owned: false };
 	}
 }

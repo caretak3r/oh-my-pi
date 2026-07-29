@@ -84,11 +84,25 @@ describe("AnimationHost coalescing", () => {
 	it("shares one timer across N subscribers and stops on last unsubscribe", () => {
 		const scheduler = new FakeScheduler();
 		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		let firstFrames = 0;
+		let secondFrames = 0;
 
-		const unsubs = [host.subscribe(() => {}), host.subscribe(() => {}), host.subscribe(() => {})];
+		const unsubs = [
+			host.subscribe(() => {
+				firstFrames++;
+			}),
+			host.subscribe(() => {
+				secondFrames++;
+			}),
+			host.subscribe(() => {}),
+		];
 		expect(host.subscriberCount).toBe(3);
 		expect(scheduler.activeTimers).toBe(1);
 		expect(scheduler.startCount).toBe(1);
+
+		scheduler.advance(TIER_CADENCE_MS.full * 2 + 1);
+		expect(firstFrames).toBe(2);
+		expect(secondFrames).toBe(2);
 
 		unsubs[0]!();
 		unsubs[1]!();
@@ -98,6 +112,54 @@ describe("AnimationHost coalescing", () => {
 		expect(host.subscriberCount).toBe(0);
 		expect(scheduler.activeTimers).toBe(0);
 		expect(host.running).toBe(false);
+	});
+
+	it("filters a subscriber cadence while keeping the host at full cadence", () => {
+		const scheduler = new FakeScheduler();
+		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		let unfilteredFrames = 0;
+		let filteredFrames = 0;
+
+		host.subscribe(() => {
+			unfilteredFrames++;
+		});
+		host.subscribe(
+			() => {
+				filteredFrames++;
+			},
+			{ cadenceMs: () => TIER_CADENCE_MS.subtle },
+		);
+
+		scheduler.advance(1000);
+
+		expect(scheduler.startCount).toBe(1);
+		expect(scheduler.activeTimers).toBe(1);
+		expect(unfilteredFrames).toBeGreaterThanOrEqual(29);
+		expect(unfilteredFrames).toBeLessThanOrEqual(30);
+		expect(filteredFrames).toBeGreaterThanOrEqual(10);
+		expect(filteredFrames).toBeLessThanOrEqual(12);
+	});
+
+	it("never emits to a cadence-zero subscriber while siblings still receive frames", () => {
+		const scheduler = new FakeScheduler();
+		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		let unfilteredFrames = 0;
+		let stoppedFrames = 0;
+
+		host.subscribe(() => {
+			unfilteredFrames++;
+		});
+		host.subscribe(
+			() => {
+				stoppedFrames++;
+			},
+			{ cadenceMs: () => 0 },
+		);
+
+		scheduler.advance(TIER_CADENCE_MS.full * 3 + 1);
+
+		expect(unfilteredFrames).toBe(3);
+		expect(stoppedFrames).toBe(0);
 	});
 
 	it("restarts the timer when a subscriber returns after the host went idle", () => {
@@ -164,6 +226,31 @@ describe("MotionPolicy gating", () => {
 		policy.setSetting("subtle");
 		policy.setSetting("off");
 		expect(seen).toEqual(["subtle", "off"]);
+	});
+
+	it("re-resolves live backpressure when the setting value is unchanged", () => {
+		const backpressure = new ToggleBackpressure();
+		backpressure.underPressure = true;
+		const policy = new MotionPolicy(interactiveEnv({ backpressure }), "full");
+		const seen: string[] = [];
+		policy.subscribe(tier => seen.push(tier));
+		expect(policy.tier).toBe("off");
+
+		backpressure.underPressure = false;
+		policy.setSetting("full");
+
+		expect(policy.tier).toBe("full");
+		expect(seen).toEqual(["full"]);
+	});
+
+	it("does not notify when the setting and environment resolve to the same tier", () => {
+		const policy = new MotionPolicy(interactiveEnv(), "full");
+		const seen: string[] = [];
+		policy.subscribe(tier => seen.push(tier));
+
+		policy.setSetting("full");
+
+		expect(seen).toEqual([]);
 	});
 
 	it("maps each tier to its cadence; off never starts a host timer", () => {
@@ -403,5 +490,66 @@ describe("AnimatedWidget live tier changes", () => {
 
 		widget.dispose();
 		expect(policy.listenerCount).toBe(1);
+	});
+});
+
+describe("fail-open error boundary", () => {
+	it("quarantines a throwing listener without stopping sibling frames", () => {
+		const scheduler = new FakeScheduler();
+		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		let throwerCalls = 0;
+		let siblingFrames = 0;
+		host.subscribe(() => {
+			throwerCalls++;
+			throw new Error("broken animation");
+		});
+		host.subscribe(() => {
+			siblingFrames++;
+		});
+
+		expect(() => scheduler.advance(TIER_CADENCE_MS.full * 2 + 1)).not.toThrow();
+		expect(siblingFrames).toBe(2);
+		expect(throwerCalls).toBe(1);
+		expect(host.subscriberCount).toBe(1);
+	});
+
+	it("stops the shared timer when the last listener is quarantined", () => {
+		const scheduler = new FakeScheduler();
+		const host = new AnimationHost({ policy: fullPolicy(), scheduler });
+		host.subscribe(() => {
+			throw new Error("broken animation");
+		});
+
+		expect(() => scheduler.advance(TIER_CADENCE_MS.full + 1)).not.toThrow();
+		expect(host.subscriberCount).toBe(0);
+		expect(scheduler.activeTimers).toBe(0);
+		expect(host.running).toBe(false);
+	});
+
+	it("disposes a widget whose frame hook throws", () => {
+		class ThrowingWidget extends AnimatedWidget {
+			override onFrame(): void {
+				throw new Error("broken widget");
+			}
+
+			renderFrame(): readonly string[] {
+				return ["static"];
+			}
+		}
+
+		const scheduler = new FakeScheduler();
+		const policy = fullPolicy();
+		const host = new AnimationHost({ policy, scheduler });
+		const tui = new CountingHost();
+		const widget = new ThrowingWidget({ tui, host, policy });
+
+		expect(() => scheduler.advance(TIER_CADENCE_MS.full + 1)).not.toThrow();
+		expect(widget.animating).toBe(false);
+		expect(host.subscriberCount).toBe(0);
+		expect(policy.listenerCount).toBe(1);
+
+		const rendersAfterFailure = tui.renders;
+		scheduler.advance(TIER_CADENCE_MS.full * 2 + 1);
+		expect(tui.renders).toBe(rendersAfterFailure);
 	});
 });

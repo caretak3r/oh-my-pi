@@ -389,16 +389,18 @@ describe("context constellation widget lifecycle", () => {
 });
 
 describe("context constellation controller", () => {
-	function recordingContext(overrides: Partial<ContextConstellationContext> = {}): {
+	function recordingContext(
+		overrides: Partial<ContextConstellationContext> = {},
+		scheduler: FrameScheduler = manualScheduler(),
+	): {
 		ctx: ContextConstellationContext;
 		calls: Array<{ key: string; content: unknown }>;
 	} {
 		const calls: Array<{ key: string; content: unknown }> = [];
+		const policy = new MotionPolicy(fullEnv, "full");
 		const ctx: ContextConstellationContext = {
 			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
+			animation: { host: new AnimationHost({ policy, scheduler }), policy },
 			theme: idTheme,
 			getContextUsage: () => usage(30),
 			setWidget: (key, content) => calls.push({ key, content }),
@@ -410,7 +412,7 @@ describe("context constellation controller", () => {
 	it("mounts an animated widget on the first defined usage reading and mutates state in place afterward", () => {
 		const scheduler = manualScheduler();
 		const controller = new ContextConstellationController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onContext(ctx);
 		expect(calls).toHaveLength(1);
@@ -459,7 +461,10 @@ describe("context constellation controller", () => {
 	it("renders and updates a static line for the off tier with zero frame-clock subscriptions", () => {
 		const scheduler = manualScheduler();
 		const controller = new ContextConstellationController({ scheduler });
-		const { ctx, calls } = recordingContext({ motionSetting: "off", getContextUsage: () => usage(42, 128_000) });
+		const { ctx, calls } = recordingContext(
+			{ animation: undefined, getContextUsage: () => usage(42, 128_000) },
+			scheduler,
+		);
 
 		controller.onContext(ctx);
 		expect((calls[0].content as string[])[0]).toBe("✦ 42.0%/128K");
@@ -469,9 +474,9 @@ describe("context constellation controller", () => {
 		expect((calls[calls.length - 1].content as string[])[0]).toBe("✦ 60.0%/128K");
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const controller = new ContextConstellationController();
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onContext(ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -488,21 +493,24 @@ describe("context constellation controller", () => {
 		expect(controller.state.snapshot().sweep).toBeUndefined();
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new ContextConstellationController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onContext(ctx);
 		const factory = calls[0].content as (
 			tui: typeof noopTui,
 			theme: ConstellationTheme,
 		) => ContextConstellationWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 
@@ -516,7 +524,7 @@ describe("context constellation controller", () => {
 	it("dispose is idempotent: a second call does not re-clear the widget", () => {
 		const scheduler = manualScheduler();
 		const controller = new ContextConstellationController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onContext(ctx);
 		controller.dispose(ctx);

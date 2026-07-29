@@ -1,3 +1,4 @@
+import { logger } from "@oh-my-pi/pi-utils";
 import { type BackpressureSignal, NO_BACKPRESSURE } from "./backpressure";
 import type { MotionPolicy } from "./motion-policy";
 
@@ -46,7 +47,7 @@ export class AnimationHost {
 	#policy: MotionPolicy;
 	#backpressure: BackpressureSignal;
 	#scheduler: FrameScheduler;
-	#listeners = new Set<FrameListener>();
+	#listeners = new Map<FrameListener, { cadenceMs?: () => number; lastEmitAt?: number }>();
 	#stopTimerFn: (() => void) | undefined;
 	#activeCadenceMs = 0;
 	#frame = 0;
@@ -76,9 +77,9 @@ export class AnimationHost {
 	 * subscriber (when the tier allows motion) starts the shared timer; removing
 	 * the last one stops it.
 	 */
-	subscribe(listener: FrameListener): () => void {
+	subscribe(listener: FrameListener, options?: { cadenceMs?: () => number }): () => void {
 		if (this.#disposed) return () => {};
-		this.#listeners.add(listener);
+		this.#listeners.set(listener, { cadenceMs: options?.cadenceMs });
 		this.#sync();
 		return () => {
 			if (!this.#listeners.delete(listener)) return;
@@ -132,8 +133,29 @@ export class AnimationHost {
 		this.#frame++;
 		const elapsedMs = this.#scheduler.now() - (this.#startedAt ?? this.#scheduler.now());
 		// Snapshot so a listener unsubscribing mid-emit cannot skip a sibling.
-		for (const listener of [...this.#listeners]) {
-			listener(this.#frame, elapsedMs);
+		let quarantined = false;
+		for (const [listener, entry] of [...this.#listeners]) {
+			try {
+				const cadenceMs = entry.cadenceMs?.();
+				if (cadenceMs !== undefined) {
+					if (cadenceMs <= 0) continue;
+					if (cadenceMs > this.#activeCadenceMs && elapsedMs - (entry.lastEmitAt ?? -Infinity) < cadenceMs) {
+						continue;
+					}
+					entry.lastEmitAt = elapsedMs;
+				}
+				listener(this.#frame, elapsedMs);
+			} catch (err) {
+				// Fail-open: one bad renderer must neither stop siblings nor escape
+				// the scheduler interval as a process-level uncaught exception.
+				this.#listeners.delete(listener);
+				quarantined = true;
+				logger.error("AnimationHost listener threw; quarantined", {
+					frame: this.#frame,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
 		}
+		if (quarantined) this.#sync();
 	}
 }

@@ -1,6 +1,5 @@
-import type { MotionSetting } from "@oh-my-pi/pi-animation";
-import { isSettingsInitialized, settings } from "../config/settings";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type CostCandleContext, CostCandleController } from "./controller";
 
 export * from "./candle";
@@ -8,18 +7,10 @@ export * from "./controller";
 export * from "./state";
 export * from "./widget";
 
-function readMotionSetting(): MotionSetting {
-	if (!isSettingsInitialized()) return "full";
-	const value = settings.get("display.animations");
-	return value === "off" || value === "subtle" || value === "full" ? value : "full";
-}
-
 function toCostCandleContext(ctx: ExtensionContext): CostCandleContext {
 	return {
 		hasUI: ctx.hasUI,
-		isTTY: process.stdout.isTTY === true,
-		env: Bun.env,
-		motionSetting: readMotionSetting(),
+		animation: ctx.ui.animation?.(),
 		theme: ctx.ui.theme,
 		setWidget: (key, content, options) => ctx.ui.setWidget(key, content, options),
 	};
@@ -40,4 +31,8 @@ function toCostCandleContext(ctx: ExtensionContext): CostCandleContext {
 export const createCostCandleExtension: ExtensionFactory = api => {
 	const controller = new CostCandleController();
 	api.on("message_end", (event, ctx) => controller.onMessageEnd(event, toCostCandleContext(ctx)));
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toCostCandleContext,
+		dispose: ctx => controller.dispose(ctx),
+	});
 };

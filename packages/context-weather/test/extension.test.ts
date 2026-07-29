@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { MotionEnvironment } from "@oh-my-pi/pi-animation";
 import type { ContextUsage, ExtensionAPI, ExtensionContext, Theme } from "@oh-my-pi/pi-coding-agent";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { type ContextWeatherExtensionOptions, createContextWeatherExtension } from "../src/extension";
@@ -14,12 +15,18 @@ class ExtensionHarness {
 	notifications: string[] = [];
 	placement: string | undefined;
 	widget: ContextWeatherWidget | undefined;
+	widgetCalls: Array<{ content: unknown }> = [];
 	renderRequests = 0;
 
 	#scheduler = new FakeScheduler();
 	#ctx: ExtensionContext;
 
-	constructor(stored: Record<string, unknown> = {}, env: Record<string, string | undefined> = {}) {
+	constructor(
+		stored: Record<string, unknown> = {},
+		env: Record<string, string | undefined> = {},
+		readPluginSettings?: (cwd: string) => Promise<Record<string, unknown>>,
+		motionEnvironment?: (tui: TUI) => MotionEnvironment,
+	) {
 		this.stored = stored;
 
 		const tui = {
@@ -36,6 +43,7 @@ class ExtensionHarness {
 			getContextUsage: () => this.usage,
 			ui: {
 				setWidget: (_key: string, content: unknown, options?: { placement?: string }) => {
+					this.widgetCalls.push({ content });
 					if (options?.placement !== undefined) this.placement = options.placement;
 					if (typeof content === "function") {
 						this.widget = (content as (tui: TUI, theme: Theme) => ContextWeatherWidget)(tui, fakeTheme());
@@ -50,9 +58,9 @@ class ExtensionHarness {
 		} as unknown as ExtensionContext;
 
 		const options: ContextWeatherExtensionOptions = {
-			readPluginSettings: async () => this.stored,
+			readPluginSettings: readPluginSettings ?? (async () => this.stored),
 			env,
-			motionEnvironment: () => ({ hasUI: true, isTTY: true, env: {} }),
+			motionEnvironment: motionEnvironment ?? (() => ({ hasUI: true, isTTY: true, env: {} })),
 			scheduler: this.#scheduler,
 		};
 		const extension = createContextWeatherExtension(options);
@@ -125,6 +133,33 @@ describe("context weather extension settings wiring", () => {
 		}
 	});
 
+	it("recovers from cleared render pressure when a context refresh keeps the same setting", async () => {
+		let underPressure = true;
+		const harness = new ExtensionHarness({ animations: "full" }, {}, undefined, () => ({
+			hasUI: true,
+			isTTY: true,
+			env: {},
+			backpressure: {
+				get underPressure() {
+					return underPressure;
+				},
+			},
+		}));
+		try {
+			await harness.emit("session_start");
+			const widget = harness.widget;
+			expect(widget?.animating).toBe(false);
+
+			underPressure = false;
+			await harness.emit("context");
+
+			expect(harness.widget).toBe(widget);
+			expect(harness.widget?.animating).toBe(true);
+		} finally {
+			await harness.shutdown();
+		}
+	});
+
 	it("uses env fallback when the store is empty and lets the store win when both are set", async () => {
 		const env = { OMP_CONTEXT_WEATHER_ANIMATIONS: "full" };
 		const envHarness = new ExtensionHarness({}, env);
@@ -185,5 +220,19 @@ describe("context weather extension settings wiring", () => {
 		} finally {
 			await harness.shutdown();
 		}
+	});
+
+	it("does not install a widget when shutdown overtakes a pending settings read", async () => {
+		const settings = Promise.withResolvers<Record<string, unknown>>();
+		const harness = new ExtensionHarness({}, {}, async () => settings.promise);
+		const mounting = harness.emit("session_start");
+
+		await harness.emit("session_shutdown");
+		const callsAtShutdown = harness.widgetCalls.length;
+		settings.resolve({ animations: "full" });
+		await mounting;
+
+		expect(harness.widgetCalls.slice(callsAtShutdown).some(call => call.content !== undefined)).toBe(false);
+		expect(harness.widget).toBeUndefined();
 	});
 });

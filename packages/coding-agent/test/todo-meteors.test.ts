@@ -309,16 +309,18 @@ describe("todo meteors widget lifecycle", () => {
 });
 
 describe("todo meteors controller", () => {
-	function recordingContext(overrides: Partial<TodoMeteorsContext> = {}): {
+	function recordingContext(
+		overrides: Partial<TodoMeteorsContext> = {},
+		scheduler: FrameScheduler = manualScheduler(),
+	): {
 		ctx: TodoMeteorsContext;
 		calls: Array<{ key: string; content: unknown }>;
 	} {
 		const calls: Array<{ key: string; content: unknown }> = [];
+		const policy = new MotionPolicy(fullEnv, "full");
 		const ctx: TodoMeteorsContext = {
 			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
+			animation: { host: new AnimationHost({ policy, scheduler }), policy },
 			theme: idTheme,
 			setWidget: (key, content) => calls.push({ key, content }),
 			...overrides,
@@ -346,7 +348,7 @@ describe("todo meteors controller", () => {
 	it("mounts an animated widget on the first valid todo tool_result and mutates state in place afterward", () => {
 		const scheduler = manualScheduler();
 		const controller = new TodoMeteorsController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onToolResult(
 			toolResult({
@@ -403,7 +405,7 @@ describe("todo meteors controller", () => {
 	it("renders and updates a static line for the off tier with zero frame-clock subscriptions", () => {
 		const scheduler = manualScheduler();
 		const controller = new TodoMeteorsController({ scheduler });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 
 		controller.onToolResult(
 			toolResult({
@@ -426,9 +428,9 @@ describe("todo meteors controller", () => {
 		expect((calls[calls.length - 1].content as string[])[0]).toBe("1/1 done");
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const controller = new TodoMeteorsController();
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onToolResult(
 			toolResult({
@@ -455,10 +457,10 @@ describe("todo meteors controller", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new TodoMeteorsController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onToolResult(
 			toolResult({
@@ -468,11 +470,14 @@ describe("todo meteors controller", () => {
 			ctx,
 		);
 		const factory = calls[0].content as (tui: typeof noopTui, theme: TodoMeteorsTheme) => TodoMeteorsWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 

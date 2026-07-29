@@ -95,9 +95,8 @@ export class MotionPolicy {
 		return this.#listeners.size;
 	}
 
-	/** Update the `animations` setting and re-resolve. */
+	/** Update the `animations` setting and unconditionally re-resolve it with the current environment. */
 	setSetting(setting: MotionSetting): void {
-		if (setting === this.#setting) return;
 		this.#setting = setting;
 		this.#reresolve();
 	}

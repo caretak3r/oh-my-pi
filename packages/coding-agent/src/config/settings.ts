@@ -1452,6 +1452,7 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 	"providers.maxInFlightRequests": value => {
 		configureProviderMaxInFlightRequests(validateProviderMaxInFlightRequests(value));
 	},
+	"display.animations": () => displayAnimationsSignal.fire(),
 	"hindsight.bankId": () => hindsightScopeSignal.fire(),
 	"hindsight.bankIdPrefix": () => hindsightScopeSignal.fire(),
 	"hindsight.scoping": () => hindsightScopeSignal.fire(),
@@ -1485,6 +1486,12 @@ const statusLineSessionAccentSignal = new SettingSignal("statusLine.sessionAccen
  * Returns an unsubscribe function. Callers should re-read settings in the callback.
  */
 export const onStatusLineSessionAccentChanged = (cb: () => void) => statusLineSessionAccentSignal.on(cb);
+
+/** Fires when `display.animations` changes at runtime. */
+const displayAnimationsSignal = new SettingSignal("display.animations");
+
+/** Subscribe to core motion-tier setting changes. Callers should re-read settings in the callback. */
+export const onDisplayAnimationsChanged = (cb: () => void) => displayAnimationsSignal.on(cb);
 
 /** Fires when any `hindsight.bankId` / `bankIdPrefix` / `scoping` value changes. */
 const hindsightScopeSignal = new SettingSignal("hindsight scope");

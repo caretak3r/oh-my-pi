@@ -370,16 +370,18 @@ describe("agent fleet widget lifecycle", () => {
 });
 
 /** Shared by "agent fleet controller" and the hardening describe block below. */
-function recordingContext(overrides: Partial<AgentFleetContext> = {}): {
+function recordingContext(
+	overrides: Partial<AgentFleetContext> = {},
+	scheduler: FrameScheduler = manualScheduler(),
+): {
 	ctx: AgentFleetContext;
 	calls: Array<{ key: string; content: unknown }>;
 } {
 	const calls: Array<{ key: string; content: unknown }> = [];
+	const policy = new MotionPolicy(fullEnv, "full");
 	const ctx: AgentFleetContext = {
 		hasUI: true,
-		isTTY: true,
-		env: {},
-		motionSetting: "full",
+		animation: { host: new AnimationHost({ policy, scheduler }), policy },
 		theme: idTheme,
 		setWidget: (key, content) => calls.push({ key, content }),
 		...overrides,
@@ -407,7 +409,7 @@ describe("agent fleet controller", () => {
 		const scheduler = manualScheduler();
 		const registry = fakeRegistry();
 		const controller = new AgentFleetController({ registry, scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 		controller.watch(ctx);
 
 		registry.emit(event("registered", "Main", { kind: "main" }));
@@ -438,7 +440,7 @@ describe("agent fleet controller", () => {
 		const scheduler = manualScheduler();
 		const registry = fakeRegistry();
 		const controller = new AgentFleetController({ registry, scheduler });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 		controller.watch(ctx);
 
 		registry.emit(event("registered", "a1"));
@@ -449,38 +451,41 @@ describe("agent fleet controller", () => {
 		expect(calls[calls.length - 1].content).toEqual(["1 done"]);
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const registry = fakeRegistry();
 		const controller = new AgentFleetController({ registry });
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 		controller.watch(ctx);
 
 		registry.emit(event("registered", "a1"));
 		expect(Array.isArray(calls[0].content)).toBe(true);
 	});
 
-	it("dispose unsubscribes from the registry and tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose unsubscribes from the registry without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const registry = fakeRegistry();
 		const controller = new AgentFleetController({ registry, scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 		controller.watch(ctx);
 
 		registry.emit(event("registered", "a1"));
 		const factory = calls[0].content as (tui: typeof noopTui, theme: AgentFleetTheme) => AgentFleetWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 		expect(registry.listenerCount).toBe(1);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
-		expect(scheduler.running).toBe(false);
+		expect(scheduler.running).toBe(true);
 		expect(registry.listenerCount).toBe(0);
 		expect(controller.watching).toBe(false);
 
 		// further registry events after dispose are ignored — no leaked subscription
 		registry.emit(event("registered", "a2"));
 		expect(calls).toHaveLength(2); // mount + the dispose's own undefined-content call, nothing more
+
+		widget.dispose();
+		expect(scheduler.running).toBe(false);
 	});
 
 	it("dispose is a no-op when never mounted", () => {

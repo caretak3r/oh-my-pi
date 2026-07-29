@@ -1,6 +1,5 @@
-import type { MotionSetting } from "@oh-my-pi/pi-animation";
-import { isSettingsInitialized, settings } from "../config/settings";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import { registerAnimatedFeatureLifecycle } from "../extensibility/extensions/animated-feature";
 import { type TokenTideContext, TokenTideController } from "./controller";
 
 export * from "./controller";
@@ -8,18 +7,10 @@ export * from "./scale";
 export * from "./state";
 export * from "./widget";
 
-function readMotionSetting(): MotionSetting {
-	if (!isSettingsInitialized()) return "full";
-	const value = settings.get("display.animations");
-	return value === "off" || value === "subtle" || value === "full" ? value : "full";
-}
-
 function toTokenTideContext(ctx: ExtensionContext): TokenTideContext {
 	return {
 		hasUI: ctx.hasUI,
-		isTTY: process.stdout.isTTY === true,
-		env: Bun.env,
-		motionSetting: readMotionSetting(),
+		animation: ctx.ui.animation?.(),
 		theme: ctx.ui.theme,
 		setWidget: (key, content, options) => ctx.ui.setWidget(key, content, options),
 	};
@@ -45,5 +36,9 @@ export const createTokenTideExtension: ExtensionFactory = api => {
 	});
 	api.on("message_end", (event, ctx) => {
 		controller.onMessageEnd(event, toTokenTideContext(ctx));
+	});
+	registerAnimatedFeatureLifecycle(api, {
+		toContext: toTokenTideContext,
+		dispose: ctx => controller.dispose(ctx),
 	});
 };

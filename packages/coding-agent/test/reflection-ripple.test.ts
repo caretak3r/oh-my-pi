@@ -539,16 +539,18 @@ describe("ReflectionRippleWidget", () => {
 });
 
 describe("reflection ripple controller", () => {
-	function recordingContext(overrides: Partial<ReflectionRippleContext> = {}): {
+	function recordingContext(
+		overrides: Partial<ReflectionRippleContext> = {},
+		scheduler: FrameScheduler = manualScheduler(),
+	): {
 		ctx: ReflectionRippleContext;
 		calls: Array<{ key: string; content: unknown }>;
 	} {
 		const calls: Array<{ key: string; content: unknown }> = [];
+		const policy = new MotionPolicy(fullEnv, "full");
 		const ctx: ReflectionRippleContext = {
 			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
+			animation: { host: new AnimationHost({ policy, scheduler }), policy },
 			theme: idTheme,
 			setWidget: (key, content) => calls.push({ key, content }),
 			...overrides,
@@ -559,7 +561,7 @@ describe("reflection ripple controller", () => {
 	it("mounts an animated widget on the first ttsr_triggered event", () => {
 		const scheduler = manualScheduler();
 		const controller = new ReflectionRippleController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [rule("no-console-log")] }, ctx);
 		expect(calls).toHaveLength(1);
@@ -571,7 +573,7 @@ describe("reflection ripple controller", () => {
 	it("a second trigger while still rippling restarts the wave without a second mount call", () => {
 		const scheduler = manualScheduler();
 		const controller = new ReflectionRippleController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [rule("a")] }, ctx);
 		scheduler.advance(100);
@@ -583,7 +585,7 @@ describe("reflection ripple controller", () => {
 	it("settles back to fully unmounted after the ripple completes, then a later trigger remounts fresh", () => {
 		const scheduler = manualScheduler();
 		const controller = new ReflectionRippleController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [rule("a")] }, ctx);
 		const factory = calls[0].content as (tui: ToggleTui, theme: ReflectionRippleTheme) => ReflectionRippleWidget;
@@ -595,8 +597,10 @@ describe("reflection ripple controller", () => {
 		const settleMs = Math.max(RIPPLE_DURATION_MS, DIM_DURATION_MS);
 		scheduler.advance(settleMs);
 		expect(controller.state.phase).toBe("idle");
-		expect(scheduler.running).toBe(false); // the animated host was disposed on settle
+		expect(scheduler.running).toBe(true); // replacing the widget, not the controller, owns unsubscription
 		expect(calls[calls.length - 1].content).toBeUndefined(); // widget removed entirely, not left as a static row
+		widget.dispose();
+		expect(scheduler.running).toBe(false);
 
 		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [rule("b")] }, ctx);
 		expect(typeof calls[calls.length - 1].content).toBe("function"); // remounted fresh
@@ -605,7 +609,7 @@ describe("reflection ripple controller", () => {
 	it("renders a static line naming the rule for the off tier, refreshed on each trigger", () => {
 		const scheduler = manualScheduler();
 		const controller = new ReflectionRippleController({ scheduler });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 
 		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [rule("a")] }, ctx);
 		expect(calls[0].content).toEqual([renderReflectionRippleOffText(["a"])]);
@@ -615,9 +619,9 @@ describe("reflection ripple controller", () => {
 		expect(calls[calls.length - 1].content).toEqual([renderReflectionRippleOffText(["b"])]);
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const controller = new ReflectionRippleController();
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [rule("a")] }, ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -631,18 +635,21 @@ describe("reflection ripple controller", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new ReflectionRippleController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [rule("a")] }, ctx);
 		const factory = calls[0].content as (tui: ToggleTui, theme: ReflectionRippleTheme) => ReflectionRippleWidget;
-		factory(new ToggleTui(), idTheme);
+		const widget = factory(new ToggleTui(), idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 
@@ -657,7 +664,7 @@ describe("reflection ripple controller", () => {
 	it("disposing twice is idempotent — the second call doesn't re-clear the widget", () => {
 		const scheduler = manualScheduler();
 		const controller = new ReflectionRippleController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onTtsrTriggered({ type: "ttsr_triggered", rules: [rule("a")] }, ctx);
 		controller.dispose(ctx);

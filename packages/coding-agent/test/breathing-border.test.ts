@@ -416,16 +416,18 @@ describe("BreathingBorderWidget", () => {
 });
 
 describe("breathing border controller", () => {
-	function recordingContext(overrides: Partial<BreathingBorderContext> = {}): {
+	function recordingContext(
+		overrides: Partial<BreathingBorderContext> = {},
+		scheduler: FrameScheduler = manualScheduler(),
+	): {
 		ctx: BreathingBorderContext;
 		calls: Array<{ key: string; content: unknown }>;
 	} {
 		const calls: Array<{ key: string; content: unknown }> = [];
+		const policy = new MotionPolicy(fullEnv, "full");
 		const ctx: BreathingBorderContext = {
 			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
+			animation: { host: new AnimationHost({ policy, scheduler }), policy },
 			theme: idTheme,
 			setWidget: (key, content) => calls.push({ key, content }),
 			...overrides,
@@ -436,7 +438,7 @@ describe("breathing border controller", () => {
 	it("mounts an animated widget on agent_start", () => {
 		const scheduler = manualScheduler();
 		const controller = new BreathingBorderController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onAgentStart({ type: "agent_start" }, ctx);
 		expect(calls).toHaveLength(1);
@@ -444,10 +446,10 @@ describe("breathing border controller", () => {
 		expect(controller.state.phase).toBe("active");
 	});
 
-	it("agent_end -> exhale -> settles back to the static widget with the host disposed, then a later agent_start remounts", () => {
+	it("agent_end settles back to static without disposing the session host, then a later agent_start remounts", () => {
 		const scheduler = manualScheduler();
 		const controller = new BreathingBorderController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onAgentStart({ type: "agent_start" }, ctx);
 		const factory = calls[0].content as (tui: ToggleTui, theme: BreathingBorderTheme) => BreathingBorderWidget;
@@ -461,8 +463,10 @@ describe("breathing border controller", () => {
 
 		scheduler.advance(EXHALE_DURATION_MS);
 		expect(controller.state.phase).toBe("idle");
-		expect(scheduler.running).toBe(false); // the animated host was disposed on settle
+		expect(scheduler.running).toBe(true); // replacing the widget, not the controller, owns unsubscription
 		expect(calls[calls.length - 1].content).toEqual([renderBreathingBorderOffText(idTheme)]);
+		widget.dispose();
+		expect(scheduler.running).toBe(false);
 
 		controller.onAgentStart({ type: "agent_start" }, ctx);
 		expect(typeof calls[calls.length - 1].content).toBe("function"); // remounted fresh
@@ -471,7 +475,7 @@ describe("breathing border controller", () => {
 	it("turn_start/turn_end modulate the breath cadence without remounting", () => {
 		const scheduler = manualScheduler();
 		const controller = new BreathingBorderController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onAgentStart({ type: "agent_start" }, ctx);
 		controller.onTurnStart({ type: "turn_start", turnIndex: 0, timestamp: 0 }, ctx);
@@ -484,16 +488,16 @@ describe("breathing border controller", () => {
 	it("renders a static line for the off tier with zero frame-clock subscriptions", () => {
 		const scheduler = manualScheduler();
 		const controller = new BreathingBorderController({ scheduler });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 
 		controller.onAgentStart({ type: "agent_start" }, ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
 		expect(scheduler.running).toBe(false);
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const controller = new BreathingBorderController();
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onAgentStart({ type: "agent_start" }, ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -508,18 +512,21 @@ describe("breathing border controller", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new BreathingBorderController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onAgentStart({ type: "agent_start" }, ctx);
 		const factory = calls[0].content as (tui: ToggleTui, theme: BreathingBorderTheme) => BreathingBorderWidget;
-		factory(new ToggleTui(), idTheme);
+		const widget = factory(new ToggleTui(), idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 

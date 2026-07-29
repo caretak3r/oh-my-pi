@@ -342,11 +342,10 @@ describe("tool constellation edge cases", () => {
 		const scheduler = manualScheduler();
 		const controller = new ToolConstellationController({ scheduler });
 		const calls: Array<{ key: string; content: unknown }> = [];
+		const policy = new MotionPolicy(fullEnv, "full");
 		const ctx: ToolConstellationContext = {
 			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
+			animation: { host: new AnimationHost({ policy, scheduler }), policy },
 			theme: idTheme,
 			setWidget: (key, content) => calls.push({ key, content }),
 		};
@@ -360,15 +359,14 @@ describe("tool constellation edge cases", () => {
 
 describe("tool constellation controller", () => {
 	function recordingContext(
-		_scheduler: FrameScheduler,
+		scheduler: FrameScheduler,
 		overrides: Partial<ToolConstellationContext> = {},
 	): { ctx: ToolConstellationContext; calls: Array<{ key: string; content: unknown }> } {
 		const calls: Array<{ key: string; content: unknown }> = [];
+		const policy = new MotionPolicy(fullEnv, "full");
 		const ctx: ToolConstellationContext = {
 			hasUI: true,
-			isTTY: true,
-			env: {},
-			motionSetting: "full",
+			animation: { host: new AnimationHost({ policy, scheduler }), policy },
 			theme: idTheme,
 			setWidget: (key, content) => calls.push({ key, content }),
 			...overrides,
@@ -399,7 +397,7 @@ describe("tool constellation controller", () => {
 	it("renders and updates a static tally for the off tier with zero frame-clock subscriptions", () => {
 		const scheduler = manualScheduler();
 		const controller = new ToolConstellationController({ scheduler });
-		const { ctx, calls } = recordingContext(scheduler, { motionSetting: "off" });
+		const { ctx, calls } = recordingContext(scheduler, { animation: undefined });
 
 		controller.onToolCall(toolCallEvent("bash"), ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -410,10 +408,10 @@ describe("tool constellation controller", () => {
 		expect((calls[1].content as string[])[0]).toContain("2"); // second fire bumps the tally in place
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const scheduler = manualScheduler();
 		const controller = new ToolConstellationController({ scheduler });
-		const { ctx, calls } = recordingContext(scheduler, { isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext(scheduler, { animation: undefined });
 
 		controller.onToolCall(toolCallEvent("bash"), ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -428,18 +426,21 @@ describe("tool constellation controller", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new ToolConstellationController({ scheduler });
 		const { ctx, calls } = recordingContext(scheduler);
 
 		controller.onToolCall(toolCallEvent("bash"), ctx);
 		const factory = calls[0].content as (tui: typeof noopTui, theme: ConstellationTheme) => ToolConstellationWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 });

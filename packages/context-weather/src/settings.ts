@@ -5,7 +5,11 @@ import type { ContextWeatherStyle } from "./renderer";
 
 /** Fully-resolved, validated Context Weather configuration. */
 export interface ContextWeatherSettings {
-	/** Motion tier consumed by the kit's `MotionPolicy`. */
+	/**
+	 * Motion override consumed by the kit's `MotionPolicy`. When absent from the
+	 * plugin store and environment, Context Weather inherits the core tier. The
+	 * local policy can force less motion, but the shared host cannot exceed core.
+	 */
 	animations: MotionSetting;
 	/** Barometer glyph style. */
 	style: ContextWeatherStyle;
@@ -18,7 +22,7 @@ export interface ContextWeatherSettings {
 }
 
 export const CONTEXT_WEATHER_DEFAULTS: ContextWeatherSettings = {
-	animations: "off",
+	animations: "full",
 	style: "tide",
 	placement: "aboveEditor",
 	stormAtPercent: DEFAULT_STORM_AT_PERCENT,
@@ -69,9 +73,12 @@ function resolveBoolean(raw: unknown, fallback: boolean): boolean {
  * fully-validated {@link ContextWeatherSettings}. Unknown/malformed values fall
  * back to defaults; `contextWeatherPlacement` maps 1:1 to `WidgetPlacement`.
  */
-export function resolveContextWeatherSettings(raw: Record<string, unknown>): ContextWeatherSettings {
+export function resolveContextWeatherSettings(
+	raw: Record<string, unknown>,
+	motionFallback: MotionSetting = CONTEXT_WEATHER_DEFAULTS.animations,
+): ContextWeatherSettings {
 	return {
-		animations: resolveEnum(raw[SETTING_KEYS.animations], MOTION_VALUES, CONTEXT_WEATHER_DEFAULTS.animations),
+		animations: resolveEnum(raw[SETTING_KEYS.animations], MOTION_VALUES, motionFallback),
 		style: resolveEnum(raw[SETTING_KEYS.style], STYLE_VALUES, CONTEXT_WEATHER_DEFAULTS.style),
 		placement: resolveEnum(raw[SETTING_KEYS.placement], PLACEMENT_VALUES, CONTEXT_WEATHER_DEFAULTS.placement),
 		stormAtPercent: resolveNumber(raw[SETTING_KEYS.stormAtPercent], CONTEXT_WEATHER_DEFAULTS.stormAtPercent, 0, 100),
@@ -102,22 +109,26 @@ export function readContextWeatherEnvRaw(env: Record<string, string | undefined>
 /** Resolve settings from environment variables alone (the documented env seam). */
 export function readContextWeatherSettingsFromEnv(
 	env: Record<string, string | undefined> = Bun.env,
+	motionFallback: MotionSetting = CONTEXT_WEATHER_DEFAULTS.animations,
 ): ContextWeatherSettings {
-	return resolveContextWeatherSettings(readContextWeatherEnvRaw(env));
+	return resolveContextWeatherSettings(readContextWeatherEnvRaw(env), motionFallback);
 }
 
 /**
  * Resolve settings from both sources with the manifest-documented precedence:
- * stored plugin setting > env-var fallback > default. Nullish stored values are
- * skipped so a cleared setting falls through to the env var, then the default.
+ * stored plugin setting > env-var fallback > core motion fallback/default.
+ * Nullish stored values are skipped so a cleared setting falls through to the
+ * env var, then the supplied core tier. A local tier is an override; production
+ * uses the shared core host, so it cannot raise motion above the core tier.
  */
 export function resolveContextWeatherSettingsFromSources(
 	pluginSettings: Record<string, unknown>,
 	env: Record<string, string | undefined> = Bun.env,
+	motionFallback: MotionSetting = CONTEXT_WEATHER_DEFAULTS.animations,
 ): ContextWeatherSettings {
 	const raw = readContextWeatherEnvRaw(env);
 	for (const [key, value] of Object.entries(pluginSettings)) {
 		if (value !== undefined && value !== null) raw[key] = value;
 	}
-	return resolveContextWeatherSettings(raw);
+	return resolveContextWeatherSettings(raw, motionFallback);
 }

@@ -55,18 +55,20 @@ function inputEvent(text: string): InputEvent {
 }
 
 /** Shared controller-context builder, hoisted to module scope so the hardening describe block can reuse it. */
-function recordingContext(overrides: Partial<PromptChargeContext> = {}): {
+function recordingContext(
+	overrides: Partial<PromptChargeContext> = {},
+	scheduler: FrameScheduler = manualScheduler(),
+): {
 	ctx: PromptChargeContext;
 	calls: Array<{ key: string; content: unknown }>;
 } {
 	const calls: Array<{ key: string; content: unknown }> = [];
+	const policy = new MotionPolicy(fullEnv, "full");
 	const ctx: PromptChargeContext = {
 		hasUI: true,
-		isTTY: true,
-		env: {},
-		motionSetting: "full",
+		animation: { host: new AnimationHost({ policy, scheduler }), policy },
 		theme: idTheme,
-		getEditorText: () => "",
+		getEditorTextLength: () => 0,
 		setWidget: (key, content) => calls.push({ key, content }),
 		...overrides,
 	};
@@ -256,12 +258,33 @@ describe("prompt charge rendering (byte-stable)", () => {
 });
 
 describe("PromptChargeWidget", () => {
-	it("polls getEditorText every frame and renders the resulting charge", () => {
+	it("samples the numeric editor length without materializing the editor text", () => {
+		const scheduler = manualScheduler();
+		const controller = new PromptChargeController({ scheduler });
+		const { ctx: baseContext, calls } = recordingContext({}, scheduler);
+		const ctx = {
+			...baseContext,
+			getEditorText: () => {
+				throw new Error("editor text must not be materialized");
+			},
+			getEditorTextLength: () => 173,
+		};
+
+		controller.mount(ctx);
+		const factory = calls[0].content as (tui: typeof noopTui, theme: PromptChargeTheme) => PromptChargeWidget;
+		const widget = factory(noopTui, idTheme);
+		scheduler.advance(1000 / 30);
+
+		expect(controller.state.snapshot().typedChars).toBe(173);
+		widget.dispose();
+	});
+
+	it("polls getEditorTextLength every frame and renders the resulting charge", () => {
 		const scheduler = manualScheduler();
 		const policy = new MotionPolicy(fullEnv, "full");
 		const host = new AnimationHost({ policy, scheduler });
 		const state = new PromptChargeState();
-		let editorText = "";
+		let editorTextLength = 0;
 		const widget = new PromptChargeWidget({
 			tui: noopTui,
 			host,
@@ -269,14 +292,14 @@ describe("PromptChargeWidget", () => {
 			state,
 			theme: idTheme,
 			clock: scheduler,
-			getEditorText: () => editorText,
+			getEditorTextLength: () => editorTextLength,
 		});
 
 		expect(widget.animating).toBe(true);
 		expect(host.subscriberCount).toBe(1);
 
 		const initial = widget.render(80);
-		editorText = "a".repeat(300);
+		editorTextLength = 300;
 		scheduler.advance(1000 / 30);
 		const next = widget.render(80);
 		expect(next).not.toEqual(initial);
@@ -301,9 +324,9 @@ describe("PromptChargeWidget", () => {
 			state,
 			theme: idTheme,
 			clock: scheduler,
-			getEditorText: () => {
+			getEditorTextLength: () => {
 				pollCount++;
-				return "";
+				return 0;
 			},
 		});
 
@@ -336,9 +359,9 @@ describe("prompt charge controller", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("falls back to a static widget outside a TTY even when animations are on", () => {
+	it("falls back to a static widget without a session animation handle", () => {
 		const controller = new PromptChargeController();
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.mount(ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -347,7 +370,7 @@ describe("prompt charge controller", () => {
 	it("onInput starts a release burst sized to the submitted text's length", () => {
 		const scheduler = manualScheduler();
 		const controller = new PromptChargeController({ scheduler });
-		const { ctx } = recordingContext();
+		const { ctx } = recordingContext({}, scheduler);
 
 		controller.mount(ctx);
 		controller.onInput(inputEvent("a".repeat(200)), ctx);
@@ -367,7 +390,7 @@ describe("prompt charge controller", () => {
 
 	it("onInput redraws the static off-tier line, only reporting the release", () => {
 		const controller = new PromptChargeController();
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.mount(ctx);
 		expect((calls[0].content as string[])[0]).toBe("⚡ idle");
@@ -388,18 +411,21 @@ describe("prompt charge controller", () => {
 		expect(controller.state.snapshot().releaseStartAt).toBeUndefined();
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new PromptChargeController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.mount(ctx);
 		const factory = calls[0].content as (tui: typeof noopTui, theme: PromptChargeTheme) => PromptChargeWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 
@@ -583,7 +609,7 @@ describe("prompt charge hardening: controller/widget dispose-remount idempotency
 
 	it("double dispose after a static off-tier mount is idempotent", () => {
 		const controller = new PromptChargeController();
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.mount(ctx);
 		controller.dispose(ctx);
@@ -618,7 +644,7 @@ describe("prompt charge hardening: controller/widget dispose-remount idempotency
 			state,
 			theme: idTheme,
 			clock: scheduler,
-			getEditorText: () => "",
+			getEditorTextLength: () => 0,
 		});
 
 		widget.dispose();

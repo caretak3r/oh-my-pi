@@ -250,16 +250,18 @@ describe("memory crystals widget lifecycle", () => {
 });
 
 /** Hoisted to module scope so both the base controller suite and the hardening suite can share it. */
-function recordingContext(overrides: Partial<MemoryCrystalsContext> = {}): {
+function recordingContext(
+	overrides: Partial<MemoryCrystalsContext> = {},
+	scheduler: FrameScheduler = manualScheduler(),
+): {
 	ctx: MemoryCrystalsContext;
 	calls: Array<{ key: string; content: unknown }>;
 } {
 	const calls: Array<{ key: string; content: unknown }> = [];
+	const policy = new MotionPolicy(fullEnv, "full");
 	const ctx: MemoryCrystalsContext = {
 		hasUI: true,
-		isTTY: true,
-		env: {},
-		motionSetting: "full",
+		animation: { host: new AnimationHost({ policy, scheduler }), policy },
 		theme: idTheme,
 		setWidget: (key, content) => calls.push({ key, content }),
 		...overrides,
@@ -271,7 +273,7 @@ describe("memory crystals controller", () => {
 	it("mounts an animated widget on the first successful compaction and mutates state in place afterward", () => {
 		const scheduler = manualScheduler();
 		const controller = new MemoryCrystalsController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onAutoCompactionEnd(successfulCompactionEnd(10_000), ctx);
 		expect(calls).toHaveLength(1);
@@ -302,7 +304,7 @@ describe("memory crystals controller", () => {
 	it("renders and updates a static line for the off tier with zero frame-clock subscriptions", () => {
 		const scheduler = manualScheduler();
 		const controller = new MemoryCrystalsController({ scheduler });
-		const { ctx, calls } = recordingContext({ motionSetting: "off" });
+		const { ctx, calls } = recordingContext({ animation: undefined }, scheduler);
 
 		controller.onAutoCompactionEnd(successfulCompactionEnd(500), ctx);
 		expect((calls[0].content as string[])[0]).toBe("◆ 1 crystal · 500 tokens reclaimed");
@@ -312,9 +314,9 @@ describe("memory crystals controller", () => {
 		expect((calls[calls.length - 1].content as string[])[0]).toBe("◆ 2 crystals · 2.5k tokens reclaimed");
 	});
 
-	it("falls back to a static line outside a TTY even when animations are on", () => {
+	it("falls back to a static line without a session animation handle", () => {
 		const controller = new MemoryCrystalsController();
-		const { ctx, calls } = recordingContext({ isTTY: false, motionSetting: "full" });
+		const { ctx, calls } = recordingContext({ animation: undefined });
 
 		controller.onAutoCompactionEnd(successfulCompactionEnd(1000), ctx);
 		expect(Array.isArray(calls[0].content)).toBe(true);
@@ -329,18 +331,21 @@ describe("memory crystals controller", () => {
 		expect(controller.state.snapshot().totalCrystals).toBe(0);
 	});
 
-	it("dispose tears down the animated host with no leaked subscription or timer", () => {
+	it("dispose clears the widget without disposing the session-owned host", () => {
 		const scheduler = manualScheduler();
 		const controller = new MemoryCrystalsController({ scheduler });
-		const { ctx, calls } = recordingContext();
+		const { ctx, calls } = recordingContext({}, scheduler);
 
 		controller.onAutoCompactionEnd(successfulCompactionEnd(1000), ctx);
 		const factory = calls[0].content as (tui: typeof noopTui, theme: MemoryCrystalsTheme) => MemoryCrystalsWidget;
-		factory(noopTui, idTheme);
+		const widget = factory(noopTui, idTheme);
 		expect(scheduler.running).toBe(true);
 
 		controller.dispose(ctx);
 		expect(calls[calls.length - 1].content).toBeUndefined();
+		expect(scheduler.running).toBe(true);
+
+		widget.dispose();
 		expect(scheduler.running).toBe(false);
 	});
 });

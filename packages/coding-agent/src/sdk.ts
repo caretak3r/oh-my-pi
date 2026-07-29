@@ -24,6 +24,7 @@ import {
 	formatActiveRepoWatchdogPrompt,
 	formatAdvisorContextPrompt,
 } from "./advisor";
+import { loadAnimationExtensions } from "./animation-extensions";
 import { type AsyncJob, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { loadCapability } from "./capability";
@@ -1841,22 +1842,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
 		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
-		inlineExtensions.push((await import("./retry-radar")).createRetryRadarExtension);
-		inlineExtensions.push((await import("./tool-constellation")).createToolConstellationExtension);
-		inlineExtensions.push((await import("./token-tide")).createTokenTideExtension);
-		inlineExtensions.push((await import("./session-bonsai")).createSessionBonsaiExtension);
-		inlineExtensions.push((await import("./todo-meteors")).createTodoMeteorsExtension);
-		inlineExtensions.push((await import("./breathing-border")).createBreathingBorderExtension);
-		inlineExtensions.push((await import("./agent-fleet")).createAgentFleetExtension);
-		inlineExtensions.push((await import("./cost-candle")).createCostCandleExtension);
-		inlineExtensions.push((await import("./reflection-ripple")).createReflectionRippleExtension);
-		inlineExtensions.push((await import("./memory-crystals")).createMemoryCrystalsExtension);
-		inlineExtensions.push((await import("./context-constellation")).createContextConstellationExtension);
-		inlineExtensions.push((await import("./diff-bloom")).createDiffBloomExtension);
-		inlineExtensions.push((await import("./cadence-equalizer")).createCadenceEqualizerExtension);
-		inlineExtensions.push((await import("./goal-horizon")).createGoalHorizonExtension);
-		inlineExtensions.push((await import("./model-weather-vane")).createModelWeatherVaneExtension);
-		inlineExtensions.push((await import("./prompt-charge")).createPromptChargeExtension);
+		inlineExtensions.push(...(await loadAnimationExtensions(options.hasUI === true)));
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}
