@@ -83,9 +83,17 @@ describe("EventController compaction vacuum lifecycle", () => {
 
 	it("falls back to the plain loader when animation construction throws", async () => {
 		vi.spyOn(logger, "error").mockImplementation(() => {});
-		const { ctx, statusContainer } = createContext(key => {
-			if (key === "display.animations") throw new Error("boom");
-			return false;
+		const { ctx, statusContainer } = createContext();
+		// The controller builds its animation through `sessionAnimation(ctx.ui)`,
+		// which resolves the motion tier from the TUI's backpressure signal. Make
+		// that read throw so the failure lands inside the guard, before the widget
+		// is ever added to the status container. (Injecting via `settings.get` no
+		// longer works: the shared session animation does not read `ctx.settings`.)
+		Object.defineProperty(ctx.ui, "renderUnderPressure", {
+			get: () => {
+				throw new Error("boom");
+			},
+			configurable: true,
 		});
 		const controller = new EventController(ctx);
 
